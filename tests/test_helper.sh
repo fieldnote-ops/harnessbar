@@ -244,7 +244,12 @@ chmod 600 "$STUB_URL_FILE"
 : > "$STUB_SS_OPEN_FILE"
 out="$("$HELPER" open 2>/dev/null)"
 assert_exit "open" 0 $?
-assert_contains "open used the web-app launcher" "$(cat "$STUB_OPEN_LOG")" "DeepSeek Harness http://127.0.0.1:12345/?token=stub-secret"
+# `open` launches the web-app window detached; wait for the stub to record it.
+for _ in $(seq 1 50); do
+  [[ -s "$STUB_OPEN_LOG" ]] && break
+  sleep 0.05
+done
+assert_contains "open used the web-app launcher" "$(cat "$STUB_OPEN_LOG" 2>/dev/null || true)" "DeepSeek Harness http://127.0.0.1:12345/?token=stub-secret"
 
 printf '\n%s/%s helper tests passed\n' "$((total - failed))" "$total"
 (( failed == 0 ))
