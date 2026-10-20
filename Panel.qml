@@ -60,10 +60,10 @@ Panel {
   }
 
   function serviceLine() {
-    if (legacy) return "Legacy dsh-web service from ~/.local/bin detected."
-    if (managed) return supervised ? "Background service: managed by harnessbar." : "Background service installed."
-    if (unitInstalled) return "Background service present but not managed by harnessbar."
-    return "No background service installed. Install it to manage dsh web from the panel."
+    if (legacy) return "Legacy dsh-web service detected; repair it to manage it here."
+    if (managed) return "Service: managed by harnessbar."
+    if (unitInstalled) return "Service present but not managed by harnessbar."
+    return "No background service installed. Install it to manage dsh web from here."
   }
 
   function updateLine() {
@@ -333,7 +333,7 @@ Panel {
             color: Util.alpha(root.foreground, 0.12)
           }
 
-          RowLayout {
+          ColumnLayout {
             Layout.fillWidth: true
             spacing: Style.space(6)
 
@@ -346,46 +346,51 @@ Panel {
               wrapMode: Text.WordWrap
             }
 
-            Button {
-              visible: !root.unitInstalled && !root.legacy
-              text: "Install service"
-              focusable: true
-              bordered: true
-              enabled: !!root.host && !root.busy
-              onClicked: root.execute("install-service")
-            }
-            Button {
-              visible: root.unitInstalled && !root.managed && !root.legacy
-              text: "Adopt service"
-              focusable: true
-              bordered: true
-              enabled: !!root.host && !root.busy
-              onClicked: root.requestAction("adopt-service")
-            }
-            Button {
-              visible: root.legacy
-              text: "Repair service"
-              focusable: true
-              bordered: true
-              enabled: !!root.host && !root.busy
-              onClicked: root.execute("repair-service")
-            }
-            Button {
-              visible: root.managed
-              text: "Apply settings"
-              focusable: true
-              bordered: true
-              enabled: !!root.host && !root.busy
-              tooltipText: "Re-apply the unit and startOnLogin setting; restart afterwards to change port/proxy."
-              onClicked: root.execute("install-service")
-            }
-            Button {
-              visible: root.managed
-              text: "Remove service"
-              focusable: true
-              bordered: true
-              enabled: !!root.host && !root.busy
-              onClicked: root.requestAction("remove-service")
+            Flow {
+              Layout.fillWidth: true
+              spacing: Style.space(6)
+
+              Button {
+                visible: !root.unitInstalled && !root.legacy
+                text: "Install service"
+                focusable: true
+                bordered: true
+                enabled: !!root.host && !root.busy
+                onClicked: root.execute("install-service")
+              }
+              Button {
+                visible: root.unitInstalled && !root.managed && !root.legacy
+                text: "Adopt service"
+                focusable: true
+                bordered: true
+                enabled: !!root.host && !root.busy
+                onClicked: root.requestAction("adopt-service")
+              }
+              Button {
+                visible: root.legacy
+                text: "Repair service"
+                focusable: true
+                bordered: true
+                enabled: !!root.host && !root.busy
+                onClicked: root.execute("repair-service")
+              }
+              Button {
+                visible: root.managed
+                text: "Apply settings"
+                focusable: true
+                bordered: true
+                enabled: !!root.host && !root.busy
+                tooltipText: "Re-apply the unit and startOnLogin setting; restart afterwards to change port/proxy."
+                onClicked: root.execute("install-service")
+              }
+              Button {
+                visible: root.managed
+                text: "Remove service"
+                focusable: true
+                bordered: true
+                enabled: !!root.host && !root.busy
+                onClicked: root.requestAction("remove-service")
+              }
             }
           }
 
