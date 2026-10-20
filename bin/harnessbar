@@ -174,7 +174,11 @@ dsh_version_cached() {
 }
 
 detect_manager() {
-  local dsh="$1" real
+  local dsh="$1" source="${2:-}" real
+  if [[ $source == "mise" || $source == "mise-shim" ]]; then
+    printf 'mise\n'
+    return 0
+  fi
   real="$(readlink -f -- "$dsh" 2>/dev/null || printf '%s' "$dsh")"
   case $real in
     */.local/share/mise/*|*/mise/installs/*)
@@ -609,7 +613,7 @@ cmd_update() {
   resolve_dsh || fail "dsh was not found. Install it first, or set the dshPath setting."
   dsh="$DSH_RESOLVED"
   current="$("$dsh" --version 2>/dev/null | head -n 1 || true)"
-  manager="$(detect_manager "$dsh")"
+  manager="$(detect_manager "$dsh" "$DSH_SOURCE")"
   latest="$(npm_latest)"
   [[ -n $latest ]] || fail "Could not resolve the latest @deepseek-ai/dsh version from npm. If your network needs a proxy, set the proxy setting."
   [[ -n $current && $current != "$latest" && $manager != "manual" ]] && updatable="true"
