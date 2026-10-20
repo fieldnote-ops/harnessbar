@@ -17,8 +17,8 @@ Panel {
   readonly property var host: hostWidget
   readonly property var st: host ? (host.status || ({})) : ({})
   readonly property bool running: st.running === true
-  readonly property string state: st.state ? String(st.state) : "unknown"
-  readonly property string stateLabel: root.stateText(root.state)
+  readonly property string serviceState: st.state ? String(st.state) : "unknown"
+  readonly property string stateLabel: root.stateText(root.serviceState)
   readonly property string version: st.version ? String(st.version) : ""
   readonly property string hostPort: host && host.hostPort ? String(host.hostPort) : ""
   readonly property bool managed: st.managed === true
@@ -143,7 +143,7 @@ Panel {
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
-    owner: root
+    owner: root.hostWidget || root
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
@@ -202,13 +202,13 @@ Panel {
                 spacing: Style.space(6)
 
                 Rectangle {
-                  width: Style.space(8)
-                  height: width
-                  radius: width / 2
+                  Layout.preferredWidth: Style.space(8)
+                  Layout.preferredHeight: Style.space(8)
                   Layout.alignment: Qt.AlignVCenter
+                  radius: width / 2
                   color: root.running
                     ? root.accent
-                    : (root.state === "error" || root.state === "no-dsh" ? root.urgent : Util.alpha(root.foreground, 0.35))
+                    : (root.serviceState === "error" || root.serviceState === "no-dsh" ? root.urgent : Util.alpha(root.foreground, 0.35))
                 }
 
                 Text {

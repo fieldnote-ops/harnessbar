@@ -50,6 +50,29 @@ for symbol in 'Commons.Color' 'import Quickshell' 'PanelKeyCatcher' 'KeyboardPan
   fi
 done
 
+# The bar host sizes widget slots from implicitWidth/implicitHeight on the
+# BarWidget root; a missing pair yields an invisible, zero-size widget.
+if grep -q 'implicitWidth: button.implicitWidth' BarWidget.qml \
+   && grep -q 'implicitHeight: button.implicitHeight' BarWidget.qml; then
+  pass "BarWidget declares implicit slot size"
+else
+  fail "BarWidget is missing implicitWidth/implicitHeight"
+fi
+
+# QtQuick.Item already owns `state`; plugin code must not shadow it.
+if grep -nE 'property (string|bool) state[[:space:]]*:' BarWidget.qml Panel.qml > /tmp/harnessbar-state.log 2>&1; then
+  cat /tmp/harnessbar-state.log >&2
+  fail "QML shadows Item.state with a property named state"
+else
+  pass "QML does not shadow Item.state"
+fi
+
+if grep -q 'owner: root.hostWidget || root' Panel.qml; then
+  pass "KeyboardPanel uses the bar widget as its popout owner"
+else
+  fail "KeyboardPanel owner is not the bar widget identity"
+fi
+
 # The helper must stay self-contained: no network download-and-execute patterns.
 if grep -nE 'curl[^|]*\|[[:space:]]*(ba)?sh|wget[^|]*\|[[:space:]]*(ba)?sh' bin/harnessbar > /tmp/harnessbar-curl.log 2>&1; then
   cat /tmp/harnessbar-curl.log >&2

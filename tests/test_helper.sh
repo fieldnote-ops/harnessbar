@@ -175,6 +175,26 @@ assert_contains "repaired unit is managed" "$(cat "$HOME/.config/systemd/user/ds
 backup_count="$(find "$HOME/.config/systemd/user" -name 'dsh-web.service.bak.*' | wc -l | tr -d ' ')"
 assert_eq "legacy unit backed up" "$backup_count" "1"
 
+# 11b. legacy runtime URL keeps the widget "running" before the restart
+cat > "$HOME/.config/systemd/user/dsh-web.service" <<'EOF'
+[Unit]
+Description=DeepSeek Harness web UI
+[Service]
+ExecStart=%h/.local/bin/dsh-web-run
+[Install]
+WantedBy=default.target
+EOF
+printf 'active\n' > "$STUB_STATE_FILE"
+mkdir -p "$XDG_RUNTIME_DIR/dsh-web"
+printf 'http://127.0.0.1:7331/?token=legacy-secret\n' > "$XDG_RUNTIME_DIR/dsh-web/url"
+chmod 600 "$XDG_RUNTIME_DIR/dsh-web/url"
+: > "$STUB_SS_OPEN_FILE"
+out="$("$HELPER" status 2>/dev/null)"
+assert_eq "legacy runtime URL reports running" "$(printf '%s' "$out" | jq -r '.running')" "true"
+assert_eq "legacy runtime URL reports port" "$(printf '%s' "$out" | jq -r '.port')" "7331"
+assert_eq "legacy unit still flagged" "$(printf '%s' "$out" | jq -r '.legacy')" "true"
+rm -f "$XDG_RUNTIME_DIR/dsh-web/url"
+
 # 12. remove-service refuses an unmanaged unit
 printf '[Service]\nExecStart=/bin/true\n' > "$HOME/.config/systemd/user/dsh-web.service"
 out="$("$HELPER" remove-service 2>/dev/null)"

@@ -226,10 +226,19 @@ unit_is_legacy() {
   grep -q 'dsh-web-run' -- "$UNIT_FILE" 2>/dev/null
 }
 
+# The URL lives in this service's runtime directory. During migration an older
+# ~/.local/bin helper may still own a running dsh web and publish its URL under
+# $XDG_RUNTIME_DIR/dsh-web, so read that as a fallback until the service is
+# restarted onto the harnessbar unit.
 read_url() {
-  local dir
-  dir="$(hb_state_dir)"
-  [[ -s "$dir/url" ]] && head -n 1 -- "$dir/url" 2>/dev/null || true
+  local candidate
+  for candidate in     "$(hb_state_dir)/url"     "${XDG_RUNTIME_DIR:-}/dsh-web/url"     "${XDG_CACHE_HOME:-$HOME/.cache}/dsh-web/url"; do
+    if [[ -n $candidate && -s $candidate ]]; then
+      head -n 1 -- "$candidate" 2>/dev/null || true
+      return 0
+    fi
+  done
+  return 0
 }
 
 url_port() {

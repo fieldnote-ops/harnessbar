@@ -34,8 +34,8 @@ BarWidget {
   readonly property int refreshMs: Math.max(2, Math.min(300, Number(setting("refreshSec", 5)))) * 1000
   readonly property var st: status || ({})
   readonly property bool running: st.running === true
-  readonly property string state: st.state ? String(st.state) : "unknown"
-  readonly property string stateLabel: root.stateText(root.state)
+  readonly property string serviceState: st.state ? String(st.state) : "unknown"
+  readonly property string stateLabel: root.stateText(root.serviceState)
   readonly property string version: st.version ? String(st.version) : ""
   readonly property string hostPort: st.port ? (String(st.host || "127.0.0.1") + ":" + String(st.port)) : ""
   readonly property bool managed: st.managed === true
@@ -54,6 +54,11 @@ BarWidget {
     return parts.join(" · ")
   }
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
+
+  // The bar host sizes each slot from these implicit properties (official bar
+  // widgets do the same); without them the widget gets a zero-size slot.
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
 
   function stateText(value) {
     switch (value) {
@@ -279,7 +284,7 @@ BarWidget {
     bar: root.bar
     text: root.glyph
     tooltipText: root.tooltip
-    active: root.running || root.busy || root.state === "error" || root.state === "no-dsh"
+    active: root.running || root.busy || root.serviceState === "error" || root.serviceState === "no-dsh"
     activeColor: (root.running || root.busy) ? Commons.Color.accent : Commons.Color.urgent
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.openUi()
