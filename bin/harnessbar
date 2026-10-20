@@ -21,6 +21,9 @@ UNIT_FILE="$UNIT_DIR/$UNIT_NAME"
 UNIT_TEMPLATE="$ROOT/systemd/dsh-web.service.template"
 HOST="127.0.0.1"
 
+# Everything this helper writes is private runtime/unit state.
+umask 077
+
 # omarchy-shell and systemd user services may start with a minimal PATH; make
 # mise-managed node tools (npm) discoverable for update checks without changing
 # the user's shell configuration.
@@ -79,14 +82,17 @@ ensure_state_dir() {
   local dir
   dir="$(hb_state_dir)"
   mkdir -p -- "$dir" 2>/dev/null || return 1
-  chmod 700 -- "$dir" 2>/dev/null || true
+  chmod 700 -- "$dir" 2>/dev/null || return 1
+  [[ "$(stat -c %u -- "$dir" 2>/dev/null || printf x)" == "$(id -u)" ]] || return 1
   printf '%s\n' "$dir"
 }
 
 configured_port() {
   local value
   value="$(setting port 3080)"
-  [[ $value =~ ^[0-9]+$ ]] || value=3080
+  if [[ ! $value =~ ^[0-9]+$ ]] || (( value > 65535 )); then
+    value=3080
+  fi
   printf '%s\n' "$value"
 }
 
@@ -138,6 +144,12 @@ resolve_dsh() {
       DSH_SOURCE=mise
       return 0
     fi
+  fi
+  candidate="$HOME/.local/bin/dsh"
+  if [[ -x $candidate ]]; then
+    DSH_RESOLVED="$candidate"
+    DSH_SOURCE=local-bin
+    return 0
   fi
   if command -v dsh >/dev/null 2>&1; then
     candidate="$(command -v dsh)"
@@ -245,7 +257,7 @@ unit_is_managed() {
 unit_is_legacy() {
   [[ -f $UNIT_FILE ]] || return 1
   unit_is_managed && return 1
-  grep -q 'dsh-web-run' -- "$UNIT_FILE" 2>/dev/null
+  grep -qE 'dsh-web(-run)?([^A-Za-z0-9_.-]|$)' -- "$UNIT_FILE" 2>/dev/null
 }
 
 # The URL lives in this service's runtime directory. During migration an older
@@ -295,6 +307,9 @@ wait_url() {
   local i
   for ((i = 0; i < timeout * 10; i++)); do
     [[ -s "$dir/url" ]] && return 0
+    if command -v systemctl >/dev/null 2>&1 && [[ "$(unit_state_raw)" == "failed" ]]; then
+      return 1
+    fi
     sleep 0.1
   done
   return 1
@@ -303,7 +318,23 @@ wait_url() {
 redact() {
   sed -E \
     -e 's/([?&]token=)[^ &"'"'"']+/\1***/g' \
-    -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+/-]+=*/\1***/g'
+    -e 's/([Tt]oken["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[A-Za-z0-9._~+/-]{8,}/\1***/g' \
+    -e 's/([Aa]uthorization:[[:space:]]*[A-Za-z]+[[:space:]]+)[A-Za-z0-9._~+/-]+=*/\1***/g' \
+    -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+/-]+=*/\1***/g' \
+    -e 's#(https?://)[^@/[:space:]]+@#\1***@#g'
+}
+
+# Proxy URLs may carry user:password; never print the userinfo part.
+sanitize_proxy() {
+  local proxy="${1:-}" scheme rest
+  scheme="${proxy%%://*}"
+  if [[ $proxy == *"://"* ]]; then
+    rest="${proxy#*://}"
+    rest="${rest##*@}"
+    printf '%s://%s\n' "$scheme" "$rest"
+  else
+    printf '%s\n' "${proxy##*@}"
+  fi
 }
 
 bool_json() {
@@ -383,6 +414,7 @@ cmd_status() {
     error="The background service is not installed yet. Install it to manage dsh web from the panel."
   else
     state="stopped"
+    error="The systemd user manager is not reachable, so the service cannot be supervised from here."
   fi
 
   if $legacy && [[ $state != "running" && $state != "degraded" ]]; then
@@ -453,9 +485,14 @@ cmd_stop() {
     json_ok "already stopped"
     return 0
   fi
-  [[ -f $UNIT_FILE ]] || fail "This dsh-web service is not managed by harnessbar; stop it from a terminal."
+  if ! unit_is_managed; then
+    if unit_is_legacy; then
+      fail "Refusing to stop a legacy dsh-web unit that harnessbar does not manage. Repair the service first."
+    fi
+    fail "Refusing to stop $UNIT_NAME: it is not managed by harnessbar."
+  fi
   systemd_bus || fail "Cannot reach the systemd user manager."
-  systemctl --user stop "$UNIT_NAME" >/dev/null 2>&1 || fail "systemctl stop failed."
+  systemctl --user stop "$UNIT_NAME" >/dev/null 2>&1 || fail "systemctl stop failed; the service may still be running."
   json_ok "stopped"
 }
 
@@ -539,6 +576,19 @@ cmd_logs() {
   journalctl --user -u "$UNIT_NAME" -n "$lines" --no-pager -o cat 2>&1 | redact
 }
 
+backup_unit_file() {
+  local backup candidate counter=0
+  candidate="$UNIT_FILE.bak.$(date +%Y%m%d-%H%M%S)"
+  while [[ -e $candidate ]]; do
+    counter=$((counter + 1))
+    candidate="$UNIT_FILE.bak.$(date +%Y%m%d-%H%M%S)-$counter"
+  done
+  cp -p -- "$UNIT_FILE" "$candidate" 2>/dev/null || return 1
+  [[ -f $candidate ]] || return 1
+  printf 'harnessbar: backed up %s to %s\n' "$UNIT_FILE" "$candidate" >&2
+  return 0
+}
+
 cmd_setup_service() {
   local replace=""
   while (($# > 0)); do
@@ -557,20 +607,25 @@ cmd_setup_service() {
     if unit_is_managed; then
       :
     elif unit_is_legacy && [[ $replace == "legacy" || $replace == "force" ]]; then
-      cp -p -- "$UNIT_FILE" "$UNIT_FILE.bak.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+      backup_unit_file || fail "Could not back up the existing $UNIT_NAME; refusing to overwrite it."
     elif [[ $replace == "force" ]]; then
-      cp -p -- "$UNIT_FILE" "$UNIT_FILE.bak.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+      backup_unit_file || fail "Could not back up the existing $UNIT_NAME; refusing to overwrite it."
     else
       fail "An unmanaged $UNIT_NAME already exists. Re-run with --replace-legacy (legacy helper) or --force."
     fi
   fi
 
   mkdir -p -- "$UNIT_DIR" 2>/dev/null || fail "Cannot create $UNIT_DIR"
-  local tmp
+  local tmp escaped_root
   tmp="$UNIT_FILE.tmp.$$"
-  sed "s|@ROOT@|${ROOT}|g" -- "$UNIT_TEMPLATE" > "$tmp" 2>/dev/null || fail "Cannot render the unit template."
+  : > "$tmp" 2>/dev/null || fail "Cannot create $tmp"
+  # sed replacement metacharacters in the plugin path must stay literal.
+  escaped_root="$(printf '%s' "$ROOT" | sed -e 's/[\\&|]/\\&/g')"
+  sed "s|@ROOT@|$escaped_root|g" -- "$UNIT_TEMPLATE" > "$tmp" 2>/dev/null \
+    || { rm -f -- "$tmp"; fail "Cannot render the unit template."; }
   install -m 0644 -- "$tmp" "$UNIT_FILE" 2>/dev/null || { rm -f -- "$tmp"; fail "Cannot write $UNIT_FILE"; }
   rm -f -- "$tmp"
+  grep -q "@ROOT@" "$UNIT_FILE" 2>/dev/null && fail "Unit template still contains @ROOT@ after rendering."
 
   systemctl --user daemon-reload >/dev/null 2>&1 || fail "systemd daemon-reload failed."
   if [[ "$(setting startOnLogin Off)" == "On" ]]; then
@@ -589,11 +644,19 @@ cmd_remove_service() {
   unit_is_managed || fail "Refusing to remove $UNIT_NAME: it is not managed by harnessbar."
   systemd_bus || fail "Cannot reach the systemd user manager."
   if unit_active; then
-    systemctl --user stop "$UNIT_NAME" >/dev/null 2>&1 || true
+    systemctl --user stop "$UNIT_NAME" >/dev/null 2>&1 \
+      || fail "Could not stop the service; refusing to remove the unit while dsh web may still be running."
   fi
-  systemctl --user disable "$UNIT_NAME" >/dev/null 2>&1 || true
-  rm -f -- "$UNIT_FILE" "$UNIT_FILE.tmp."* 2>/dev/null || true
-  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  if [[ "$(systemctl --user is-enabled "$UNIT_NAME" 2>/dev/null || true)" == "enabled" ]]; then
+    systemctl --user disable "$UNIT_NAME" >/dev/null 2>&1 || fail "Could not disable the unit; refusing to remove it."
+  fi
+  rm -f -- "$UNIT_FILE" 2>/dev/null || fail "Could not remove $UNIT_FILE."
+  systemctl --user daemon-reload >/dev/null 2>&1 || fail "systemd daemon-reload failed after removing the unit."
+  [[ -e $UNIT_FILE ]] && fail "The unit file still exists after removal."
+  find "$HOME/.config/systemd/user" -type l -name "$UNIT_NAME" -delete 2>/dev/null || true
+  if find "$HOME/.config/systemd/user" -type l -name "$UNIT_NAME" 2>/dev/null | grep -q .; then
+    fail "A stale enable symlink for $UNIT_NAME remains in $HOME/.config/systemd/user."
+  fi
   local dir
   dir="$(hb_state_dir)"
   rm -f -- "$dir/url" "$dir/version" 2>/dev/null || true
@@ -614,9 +677,19 @@ cmd_update() {
   dsh="$DSH_RESOLVED"
   current="$("$dsh" --version 2>/dev/null | head -n 1 || true)"
   manager="$(detect_manager "$dsh" "$DSH_SOURCE")"
+  if [[ $manager == "manual" ]]; then
+    if [[ $mode == "check" ]]; then
+      jq -n \
+        --arg current "$current" \
+        --arg message "dsh is not managed by mise or npm here; update it with its own installer." \
+        '{ok: true, current: $current, latest: "", manager: "manual", updatable: false, message: $message}'
+      return 0
+    fi
+    fail "dsh is not managed by mise or npm here; update it with its own installer."
+  fi
   latest="$(npm_latest)"
   [[ -n $latest ]] || fail "Could not resolve the latest @deepseek-ai/dsh version from npm. If your network needs a proxy, set the proxy setting."
-  [[ -n $current && $current != "$latest" && $manager != "manual" ]] && updatable="true"
+  [[ -n $current && $current != "$latest" ]] && updatable="true"
 
   if [[ $mode == "check" ]]; then
     jq -n \
@@ -647,8 +720,10 @@ cmd_update() {
   dir="$(hb_state_dir)"
   rm -f -- "$dir/version" 2>/dev/null || true
   local restarted="false"
-  if unit_active; then
-    systemctl --user restart "$UNIT_NAME" >/dev/null 2>&1 && restarted="true" || true
+  if unit_is_managed && unit_active; then
+    if systemctl --user restart "$UNIT_NAME" >/dev/null 2>&1; then
+      restarted="true"
+    fi
   fi
   if [[ $restarted == "true" ]]; then
     json_ok "Updated to $latest and restarted the service."
@@ -687,7 +762,7 @@ cmd_run() {
     export HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" ALL_PROXY="$proxy" \
       http_proxy="$proxy" https_proxy="$proxy" all_proxy="$proxy" \
       NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1"
-    printf 'harnessbar: using configured proxy %s\n' "$proxy" >&2
+    printf 'harnessbar: using configured proxy %s\n' "$(sanitize_proxy "$proxy")" >&2
   fi
   "$dsh" --version > "$VERSION_CACHE" 2>/dev/null || true
 
@@ -698,14 +773,25 @@ cmd_run() {
     if [[ $line == *"http://"* && $line == *"token="* ]]; then
       local url="${line#*http://}"
       url="http://${url%% *}"
-      local shown_port=""
+      local shown_port="" stored=false tmp_url
       if [[ $url =~ ^http://[^/:]+:([0-9]+) ]]; then
         shown_port="${BASH_REMATCH[1]}"
       fi
-      printf '%s\n' "$url" > "$URL_FILE.tmp" 2>/dev/null \
-        && chmod 600 -- "$URL_FILE.tmp" 2>/dev/null \
-        && mv -f -- "$URL_FILE.tmp" "$URL_FILE" 2>/dev/null
-      printf 'dsh web: listening on %s:%s (launch token captured and hidden)\n' "$HOST" "$shown_port"
+      if [[ $url =~ ^https?://[^[:space:]]+$ ]]; then
+        tmp_url="$URL_FILE.tmp.$$"
+        if (umask 077 && printf '%s\n' "$url" > "$tmp_url") 2>/dev/null \
+          && chmod 600 -- "$tmp_url" 2>/dev/null \
+          && mv -f -- "$tmp_url" "$URL_FILE" 2>/dev/null; then
+          stored=true
+        else
+          rm -f -- "$tmp_url" 2>/dev/null || true
+        fi
+      fi
+      if $stored; then
+        printf 'dsh web: listening on %s:%s (launch token captured and hidden)\n' "$HOST" "$shown_port"
+      else
+        printf 'dsh web: listening on %s:%s (launch token could NOT be stored safely; Open/Copy may fail)\n' "$HOST" "$shown_port"
+      fi
     elif [[ $line == *"token="* ]]; then
       printf '%s\n' "$line" | redact
     else

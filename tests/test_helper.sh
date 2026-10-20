@@ -124,6 +124,9 @@ out="$("$HELPER" logs 2>/dev/null)"
 assert_contains "logs keep the host line" "$out" "dsh web:"
 assert_not_contains "logs redact tokens" "$out" "super-secret-token"
 assert_contains "logs show redaction marker" "$out" "token=***"
+assert_not_contains "logs redact JSON tokens" "$out" "abcdef1234567890"
+assert_not_contains "logs redact authorization headers" "$out" "abcdefghijklmnop"
+assert_not_contains "logs redact proxy passwords" "$out" "user:password"
 
 # 7. update check
 out="$("$HELPER" update --check 2>/dev/null)"
@@ -195,6 +198,38 @@ assert_eq "legacy runtime URL reports port" "$(printf '%s' "$out" | jq -r '.port
 assert_eq "legacy unit still flagged" "$(printf '%s' "$out" | jq -r '.legacy')" "true"
 rm -f "$XDG_RUNTIME_DIR/dsh-web/url"
 
+# 11c. stop refuses a unit it does not manage
+setup_env
+cat > "$HOME/.config/systemd/user/dsh-web.service" <<'EOF'
+[Service]
+ExecStart=/bin/true
+EOF
+printf 'active\n' > "$STUB_STATE_FILE"
+out="$("$HELPER" stop 2>/dev/null)"
+assert_eq "stop refuses unmanaged unit" "$?" "1"
+assert_contains "stop refusal explains ownership" "$out" "not managed by harnessbar"
+assert_eq "stop did not stop the unmanaged unit" "$(cat "$STUB_STATE_FILE")" "active"
+
+# 11d. legacy detection accepts the older dsh-web helper too
+cat > "$HOME/.config/systemd/user/dsh-web.service" <<'EOF'
+[Service]
+ExecStart=%h/.local/bin/dsh-web
+EOF
+out="$("$HELPER" status 2>/dev/null)"
+assert_eq "dsh-web helper is detected as legacy" "$(printf '%s' "$out" | jq -r '.legacy')" "true"
+out="$("$HELPER" setup-service --replace-legacy 2>/dev/null)"
+assert_exit "dsh-web legacy repair" 0 $?
+
+# 11e. remove-service aborts when stop fails and keeps the unit
+setup_env
+"$HELPER" setup-service >/dev/null 2>&1
+printf 'active\n' > "$STUB_STATE_FILE"
+: > "$STUB_SS_OPEN_FILE"
+out="$(STUB_FAIL_STOP=1 "$HELPER" remove-service 2>/dev/null)"
+assert_eq "remove-service fails when stop fails" "$?" "1"
+assert_contains "remove failure message" "$out" "Could not stop the service"
+assert_file_exists "unit kept after failed remove" "$HOME/.config/systemd/user/dsh-web.service"
+
 # 12. remove-service refuses an unmanaged unit
 printf '[Service]\nExecStart=/bin/true\n' > "$HOME/.config/systemd/user/dsh-web.service"
 out="$("$HELPER" remove-service 2>/dev/null)"
@@ -250,6 +285,24 @@ for _ in $(seq 1 50); do
   sleep 0.05
 done
 assert_contains "open used the web-app launcher" "$(cat "$STUB_OPEN_LOG" 2>/dev/null || true)" "DeepSeek Harness http://127.0.0.1:12345/?token=stub-secret"
+
+# 16. startOnLogin is applied when setup-service is re-run on a managed unit
+setup_env
+"$HELPER" setup-service >/dev/null 2>&1
+write_shell_config "12345" "$STUB_DSH_PATH" ', "startOnLogin": "On"'
+out="$("$HELPER" setup-service 2>/dev/null)"
+assert_exit "managed setup re-apply" 0 $?
+assert_contains "startOnLogin On re-enables unit" "$(cat "$STUB_LOG")" "systemctl --user enable"
+
+# 17. the unit template renders paths containing spaces and ampersands
+setup_env
+copy_root="$TESTROOT/root & dir"
+mkdir -p "$copy_root"
+cp -r "$ROOT/bin" "$copy_root/bin"
+cp -r "$ROOT/systemd" "$copy_root/systemd"
+out="$("$copy_root/bin/harnessbar" setup-service 2>/dev/null)"
+assert_exit "setup-service from a path with & and spaces" 0 $?
+assert_contains "ExecStart keeps the literal & path" "$(cat "$HOME/.config/systemd/user/dsh-web.service")" "$copy_root/bin/harnessbar"
 
 printf '\n%s/%s helper tests passed\n' "$((total - failed))" "$total"
 (( failed == 0 ))

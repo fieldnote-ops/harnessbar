@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.fieldnote-ops.harnessbar",
   "name": "DeepSeek Harness",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "FIELD NOTE",
   "license": "MIT",
   "homepage": "https://github.com/fieldnote-ops/harnessbar",

@@ -51,6 +51,18 @@ omarchy bar set io.github.fieldnote-ops.harnessbar proxy http://127.0.0.1:7890
 `NO_PROXY` is set to `localhost,127.0.0.1,::1` automatically. Update checks use
 the same proxy.
 
+## Stop or remove is refused
+
+`Stop` and `Remove service` only act on a unit carrying harnessbar's marker.
+A legacy `~/.local/bin` unit must be repaired first (**Repair service** or
+`setup-service --replace-legacy`). `remove-service` also refuses to delete the
+unit if stopping it fails, so a running process is never left unsupervised.
+
+## Changing startOnLogin has no effect
+
+Re-apply the unit after changing the setting: panel → **Apply settings**, or
+`"$HB" setup-service`. Port and proxy changes require a **Restart** afterwards.
+
 ## "Legacy service detected"
 
 An older local setup shipped `~/.local/bin/dsh-web`, `dsh-web-run`, and a
@@ -87,7 +99,10 @@ npm view @deepseek-ai/dsh version
 ```
 
 The update action only supports mise- and npm-managed `dsh` installations; a
-manually installed copy is reported as `manual` and must be updated by hand.
+manually installed copy is reported as `manual` (no npm query is attempted) and
+must be updated by hand. Proxy userinfo is stripped from the service log line,
+and the panel's journal view redacts common token, Authorization, and Bearer
+formats plus URL credentials.
 
 ## Copy URL does nothing
 

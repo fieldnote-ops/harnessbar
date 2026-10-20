@@ -25,6 +25,7 @@ Panel {
   readonly property bool legacy: st.legacy === true
   readonly property bool unitInstalled: st.unit_installed === true
   readonly property bool supervised: st.supervised === true
+  readonly property bool unitActive: st.unit_state === "active" || st.unit_state === "activating" || st.unit_state === "reloading" || st.supervised === true
   readonly property bool busy: host ? host.busy === true : false
   readonly property string busyLabel: host && host.busyLabel ? String(host.busyLabel) : ""
   readonly property string actionError: host && host.actionError ? String(host.actionError) : ""
@@ -108,6 +109,10 @@ Panel {
       case "update":
         pendingAction = "update"
         pendingMessage = "Update dsh and restart the service? Open sessions will disconnect."
+        break
+      case "adopt-service":
+        pendingAction = "adopt-service"
+        pendingMessage = "Replace the existing dsh-web.service with the harnessbar-managed unit? The old unit file is backed up first."
         break
       case "remove-service":
         pendingAction = "remove-service"
@@ -299,11 +304,12 @@ Panel {
               onClicked: root.execute("copy")
             }
             Button {
-              text: root.running ? "Stop" : "Start"
+              text: root.unitActive ? "Stop" : "Start"
               focusable: true
               bordered: true
-              enabled: !!root.host && !root.busy
-              onClicked: root.running ? root.requestAction("stop") : root.execute("start")
+              enabled: !!root.host && !root.busy && root.managed
+              tooltipText: root.managed ? "" : "Install or repair the background service to control it from here."
+              onClicked: root.unitActive ? root.requestAction("stop") : root.execute("start")
             }
             Button {
               text: "Restart"
@@ -354,7 +360,7 @@ Panel {
               focusable: true
               bordered: true
               enabled: !!root.host && !root.busy
-              onClicked: root.execute("adopt-service")
+              onClicked: root.requestAction("adopt-service")
             }
             Button {
               visible: root.legacy
@@ -363,6 +369,15 @@ Panel {
               bordered: true
               enabled: !!root.host && !root.busy
               onClicked: root.execute("repair-service")
+            }
+            Button {
+              visible: root.managed
+              text: "Apply settings"
+              focusable: true
+              bordered: true
+              enabled: !!root.host && !root.busy
+              tooltipText: "Re-apply the unit and startOnLogin setting; restart afterwards to change port/proxy."
+              onClicked: root.execute("install-service")
             }
             Button {
               visible: root.managed
@@ -388,7 +403,7 @@ Panel {
             }
 
             Button {
-              visible: !root.updateInfo || !root.updateInfo.latest
+              visible: !root.updateInfo || root.updateInfo.updatable !== true
               text: "Check updates"
               focusable: true
               bordered: true
@@ -425,6 +440,7 @@ Panel {
                 width: parent.width
                 readOnly: true
                 selectByMouse: true
+                textFormat: TextEdit.PlainText
                 text: root.logsText
                 color: root.foreground
                 font.family: "monospace"

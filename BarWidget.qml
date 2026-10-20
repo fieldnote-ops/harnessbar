@@ -19,6 +19,7 @@ BarWidget {
   property string logsText: ""
   property bool logsBusy: false
   property var updateInfo: ({})
+  property string lastAction: ""
 
   // --- paths --------------------------------------------------------------
   readonly property string pluginDir: {
@@ -31,7 +32,12 @@ BarWidget {
   readonly property string helper: pluginDir + "/bin/harnessbar"
 
   // --- derived status -----------------------------------------------------
-  readonly property int refreshMs: Math.max(2, Math.min(300, Number(setting("refreshSec", 5)))) * 1000
+  readonly property int refreshMs: {
+    var value = Number(setting("refreshSec", 5))
+    if (!isFinite(value)) value = 5
+    value = Math.max(2, Math.min(300, value))
+    return Math.round(value * 1000)
+  }
   readonly property var st: status || ({})
   readonly property bool running: st.running === true
   readonly property string serviceState: st.state ? String(st.state) : "unknown"
@@ -89,10 +95,11 @@ BarWidget {
   function toggle() { if (panelLoader.item) panelLoader.item.toggle() }
 
   // --- commands -----------------------------------------------------------
-  function runCommand(label, args) {
-    if (busy) return false
+  function runCommand(label, args, actionKey) {
+    if (busy || actionProcess.running || updateCheckProcess.running) return false
     busy = true
     busyLabel = label
+    lastAction = actionKey || ""
     actionError = ""
     lastMessage = ""
     actionProcess.command = [root.helper].concat(args)
@@ -106,20 +113,20 @@ BarWidget {
     statusProcess.running = true
   }
 
-  function startService() { return runCommand("starting…", ["start"]) }
-  function stopService() { return runCommand("stopping…", ["stop"]) }
-  function restartService() { return runCommand("restarting…", ["restart"]) }
-  function openUi() { return runCommand("opening…", ["open"]) }
-  function copyUrl() { return runCommand("copying…", ["copy-url"]) }
+  function startService() { return runCommand("starting…", ["start"], "start") }
+  function stopService() { return runCommand("stopping…", ["stop"], "stop") }
+  function restartService() { return runCommand("restarting…", ["restart"], "restart") }
+  function openUi() { return runCommand("opening…", ["open"], "open") }
+  function copyUrl() { return runCommand("copying…", ["copy-url"], "copy") }
   function setupService() {
     var args = ["setup-service"]
     if (legacy) args.push("--replace-legacy")
-    return runCommand("installing service…", args)
+    return runCommand("installing service…", args, "setup")
   }
-  function repairService() { return runCommand("repairing service…", ["setup-service", "--replace-legacy"]) }
-  function adoptService() { return runCommand("adopting service…", ["setup-service", "--force"]) }
-  function removeService() { return runCommand("removing service…", ["remove-service"]) }
-  function applyUpdate() { return runCommand("updating…", ["update"]) }
+  function repairService() { return runCommand("repairing service…", ["setup-service", "--replace-legacy"], "repair") }
+  function adoptService() { return runCommand("adopting service…", ["setup-service", "--force"], "adopt") }
+  function removeService() { return runCommand("removing service…", ["remove-service"], "remove") }
+  function applyUpdate() { return runCommand("updating…", ["update"], "update") }
 
   function fetchLogs() {
     if (logsBusy) return
@@ -178,6 +185,10 @@ BarWidget {
         root.lastMessage = String(parsed.message)
         clearMessageTimer.restart()
       }
+      if (root.lastAction === "update" && exitCode === 0) {
+        root.updateInfo = ({})
+        Qt.callLater(root.checkUpdates)
+      }
       root.refreshStatus()
     }
   }
@@ -186,9 +197,15 @@ BarWidget {
     id: logsProcess
     command: [root.helper, "logs", "160"]
     stdout: StdioCollector { id: logsOut; waitForEnd: true }
+    stderr: StdioCollector { id: logsErr; waitForEnd: true }
     onExited: function(exitCode) {
       root.logsBusy = false
-      root.logsText = String(logsOut.text || "")
+      if (exitCode !== 0) {
+        var error = String(logsErr.text || "").trim()
+        root.logsText = "Journal unavailable" + (error !== "" ? ": " + error : ".")
+      } else {
+        root.logsText = String(logsOut.text || "")
+      }
     }
   }
 
@@ -223,6 +240,10 @@ BarWidget {
     interval: 90000
     repeat: false
     onTriggered: {
+      if (actionProcess.running || updateCheckProcess.running) {
+        root.actionError = "The command is taking longer than expected; waiting for it to finish."
+        return
+      }
       root.busy = false
       root.busyLabel = ""
       root.actionError = "The command timed out. Check the service journal for details."
@@ -286,6 +307,7 @@ BarWidget {
     tooltipText: root.tooltip
     active: root.running || root.busy || root.serviceState === "error" || root.serviceState === "no-dsh"
     activeColor: (root.running || root.busy) ? Commons.Color.accent : Commons.Color.urgent
+    opacity: (root.running || root.busy || root.serviceState === "error" || root.serviceState === "no-dsh") ? 1.0 : 0.55
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.openUi()
       else if (buttonCode === Qt.MiddleButton) root.refreshStatus()

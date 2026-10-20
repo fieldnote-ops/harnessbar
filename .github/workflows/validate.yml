@@ -17,9 +17,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq
-          sudo apt-get install -y qt6-declarative-dev-tools || true
-          qmllint --version || true
+          sudo apt-get install -y jq qt6-declarative-dev-tools
+          if [ -x /usr/lib/qt6/bin/qmllint ]; then
+            sudo ln -sf /usr/lib/qt6/bin/qmllint /usr/local/bin/qmllint
+          fi
+          qmllint --version
 
       - name: Validate manifest and repository layout
         run: bash tools/validate.sh
@@ -28,4 +30,6 @@ jobs:
         run: bash -n bin/harnessbar
 
       - name: Tests
+        env:
+          HARNESSBAR_REQUIRE_QML: "1"
         run: bash tests/run_tests.sh

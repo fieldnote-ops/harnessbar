@@ -42,6 +42,10 @@ case "$command" in
     fi
     ;;
   stop)
+    if [[ "${STUB_FAIL_STOP:-0}" == "1" ]]; then
+      printf 'injected stop failure\n' >&2
+      exit 1
+    fi
     [[ -n $state_file ]] && printf 'inactive\n' > "$state_file"
     [[ -n $url_file ]] && rm -f "$url_file"
     [[ -n ${STUB_SS_OPEN_FILE:-} ]] && rm -f "$STUB_SS_OPEN_FILE"

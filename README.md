@@ -42,6 +42,7 @@ A plain toggle starts a process and hopes for the best. harnessbar treats
 | Omarchy 4 (Quattro) | Hosts the shell and the bar widget | Developed and tested on Omarchy 4.0.6 |
 | `dsh` | The web UI this widget manages | Tested with `@deepseek-ai/dsh` 0.2.1-rc.2; install with mise or npm |
 | systemd user manager | Runs the background service | Standard on Omarchy |
+| `jq` | Reads inline settings and formats the status JSON | Present on Omarchy by default |
 | `wl-clipboard` | Optional, for **Copy URL** | The button reports a clear error when absent |
 
 `dsh` is not a system package. Install it however you manage tools:
@@ -74,6 +75,7 @@ Click the bar glyph. The panel starts in **service not installed** state:
 
 1. **Install service** — writes `~/.config/systemd/user/dsh-web.service` from
    the shipped template and runs `systemctl --user daemon-reload` (no sudo).
+   After changing `startOnLogin`, use **Apply settings** on the same row.
 2. **Start** — starts `dsh web`, captures its tokenized URL into a private
    runtime file, and reports the health.
 3. **Open UI** — opens the web UI in an Omarchy web-app window (or the default
@@ -100,7 +102,7 @@ Change them with `omarchy bar set`, and restart the service after changing
 | `proxy` | string | `""` | Optional HTTP(S) proxy for the service and update checks, e.g. `http://127.0.0.1:7890` |
 | `dshPath` | path | `""` | Optional absolute path to `dsh`; empty auto-detects mise, `PATH`, and `~/.local/bin` |
 | `openMode` | enum | `Webapp` | `Webapp` uses `omarchy-launch-or-focus-webapp`; `Browser` uses `xdg-open` |
-| `startOnLogin` | enum | `Off` | Applied when the service is installed or repaired (`On` runs `systemctl --user enable`) |
+| `startOnLogin` | enum | `Off` | Applied by **Install service** / **Apply settings** (`On` runs `systemctl --user enable`) |
 | `refreshSec` | integer | `5` | Status polling interval |
 | `glyph` | string | `󰚩` | Nerd Font glyph for the bar; use `DS` for a plain label |
 
@@ -120,8 +122,9 @@ omarchy bar set io.github.fieldnote-ops.harnessbar startOnLogin On
 | `o` / `c` / `s` / `r` / `g` / `u` | Open UI / copy URL / start-stop / restart / logs / check updates |
 | `Esc` | Close the panel |
 
-Destructive actions (stop, restart, update, remove service) ask for confirmation
-first. Copy URL copies a **credential**: the printed URL contains a per-process
+Destructive actions (stop, restart, update, adopt service, remove service) ask
+for confirmation first. **Stop** is only offered for a unit this plugin manages;
+repair a legacy unit first. Copy URL copies a **credential**: the printed URL contains a per-process
 launch token.
 
 Shell IPC is available for keybindings and scripts:
@@ -157,9 +160,11 @@ is detected and can be repaired instead of duplicated.
   accordingly.
 - The update action uses your existing mise/npm installation; nothing is
   downloaded silently.
-- The Omarchy marketplace security baseline reports `service-management` and
-  `package-manager` capabilities for this plugin; both are described here for
-  review rather than hidden.
+- Omarchy's automated marketplace baseline reports the capabilities this plugin
+  deliberately uses: `service-management` (systemd user unit) and
+  `package-manager` (mise/npm update action), plus `privilege` from clearly
+  negated documentation and `remote-build` from the development clone shown
+  below. They are described here for review rather than hidden.
 
 ## Removal
 
@@ -200,12 +205,15 @@ git config core.hooksPath .githooks   # optional pre-push preflight
 
 The tests stub `systemctl`, `dsh`, `npm`, `mise`, `journalctl`, and the launch
 helpers, so they run on any machine without starting a real service. QML is
-checked with `qmllint` when available. CI runs the same gates on Ubuntu.
+checked with `qmllint`; CI requires the tool and runs the same gates on Ubuntu.
 
 ## Compatibility
 
-Tested on Omarchy 4.0.6 (Quattro) with `@deepseek-ai/dsh` 0.2.1-rc.2 on
-2026-10-20. The plugin relies on the documented `dsh web` startup contract: the
+Tested live on Omarchy 4.0.6 (Quattro) with `@deepseek-ai/dsh` 0.2.1-rc.2 on
+2026-10-20: non-zero bar slot, panel open/close, live status, legacy-unit
+detection and one in-place service repair. Lifecycle actions are covered by
+stubbed-systemd tests; restarting the service that hosts an open GUI was not
+exercised in development. The plugin relies on the documented `dsh web` startup contract: the
 `dsh web:` line is the readiness signal, the printed URL carries a per-process
 token, and `--port 0` selects a free port. Newer DSH versions keep working as
 long as that line is printed; otherwise the panel reports a clear error instead

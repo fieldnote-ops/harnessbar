@@ -26,11 +26,11 @@ if command -v qmllint >/dev/null 2>&1; then
     fail "qmllint BarWidget.qml Panel.qml"
   fi
 else
-  printf 'skip - qmllint not installed; QML syntax not checked\n'
-fi
-
-if qmllint --version >/dev/null 2>&1; then
-  pass "qmllint is available"
+  if [[ ${HARNESSBAR_REQUIRE_QML:-0} == "1" ]]; then
+    fail "qmllint is required (HARNESSBAR_REQUIRE_QML=1) but was not found"
+  else
+    printf 'skip - qmllint not installed; QML syntax not checked\n'
+  fi
 fi
 
 # Qt 6.12 introduces its own Color type; Omarchy requires palette access through
@@ -40,6 +40,18 @@ if grep -nE '(^|[^A-Za-z0-9_.])Color\.' BarWidget.qml Panel.qml > /tmp/harnessba
   fail "QML must use Commons.Color, not a bare Color singleton"
 else
   pass "QML uses Commons.Color"
+fi
+
+if grep -q 'textFormat: TextEdit.PlainText' Panel.qml; then
+  pass "journal text is plain text"
+else
+  fail "journal TextEdit must set TextEdit.PlainText"
+fi
+
+if grep -q 'readonly property bool unitActive' Panel.qml; then
+  pass "panel derives unit-active state for start/stop"
+else
+  fail "panel does not derive the unit-active state"
 fi
 
 for symbol in 'Commons.Color' 'import Quickshell' 'PanelKeyCatcher' 'KeyboardPanel'; do

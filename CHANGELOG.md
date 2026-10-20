@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.1 — 2026-10-20
+
+Hardening release after an independent review; no behaviour changes for the
+happy path.
+
+- `stop` / `remove-service` now refuse to act on units harnessbar does not
+  manage, and `remove-service` aborts if the service cannot be stopped instead
+  of silently deleting the unit.
+- Unit replacement refuses to proceed when the existing unit cannot be backed
+  up; backups use unique names; unit rendering no longer treats `&` in the
+  plugin path as a pattern.
+- Legacy detection accepts both old `dsh-web` and `dsh-web-run` helpers.
+- Launch-token capture uses a private umask, verifies the write, and says so
+  when the URL could not be stored; wider log redaction covers JSON `token`
+  fields, Authorization/Bearer headers, URL userinfo, and the proxy log line.
+- Panel: Start/Stop follows the actual unit state (including `starting`),
+  Adopt goes through confirmation, **Apply settings** re-applies the unit and
+  `startOnLogin`, update state resets after an update, journal text is plain
+  text, and Check updates remains available when no update exists.
+- Bar icon dims while stopped; command timeouts no longer reassign a running
+  process; refresh interval handles invalid settings.
+- Settings/readability: stricter port validation, clearer systemd-unavailable
+  error, `~/.local/bin/dsh` auto-detection, and documentation corrections
+  (`jq` dependency, capability wording, live-test scope).
+- Tests: 69 helper assertions, failure-path and `&`-path coverage; CI requires
+  `qmllint`; validation checks the official `defaultSection` set and the preview.
+
 ## 0.2.0 — 2026-10-20
 
 First public release of **harnessbar**, a service-grade Omarchy bar widget for

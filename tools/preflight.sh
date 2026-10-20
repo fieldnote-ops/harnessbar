@@ -10,21 +10,18 @@ ok() { printf '✅ %s\n' "$*"; }
 warn() { printf '⚠️  %s\n' "$*"; }
 die() { printf '❌ %s\n' "$*" >&2; exit 1; }
 
-step "1/4 Manifest and repository layout"
+step "1/3 Manifest and repository layout"
 bash tools/validate.sh || die "manifest validation failed"
 ok "manifest validation passed"
 
-step "2/4 Shell helper syntax"
+step "2/3 Shell helper syntax"
 bash -n bin/harnessbar || die "bin/harnessbar has a syntax error"
 ok "bash syntax passed"
 
-step "3/4 Tests"
+step "3/3 Tests"
 bash tests/run_tests.sh || die "test suite failed"
 ok "tests passed"
 
-step "4/4 QML checks"
-bash tests/test_barwidget.sh || die "QML checks failed"
-ok "QML checks passed"
 
 if command -v omarchy >/dev/null 2>&1; then
   step "Omarchy plugin validate (local CLI)"

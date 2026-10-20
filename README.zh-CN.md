@@ -37,6 +37,7 @@
 | Omarchy 4（Quattro） | 提供 shell 与状态栏 | 在 Omarchy 4.0.6 上开发与验证 |
 | `dsh` | 被管理的 Web UI | 已测试 `@deepseek-ai/dsh` 0.2.1-rc.2；用 mise 或 npm 安装 |
 | systemd 用户管理器 | 运行后台服务 | Omarchy 默认具备 |
+| `jq` | 读取内联设置、格式化状态 JSON | Omarchy 默认自带 |
 | `wl-clipboard` | 可选，用于「Copy URL」 | 未安装时按钮会给出明确错误 |
 
 ```sh
@@ -70,7 +71,7 @@ omarchy bar move io.github.fieldnote-ops.harnessbar --after omarchy.agents
    `~/.config/systemd/user/dsh-web.service`，并执行 `systemctl --user daemon-reload`
    （无需 sudo）。
 2. **Start**：启动 `dsh web`，把带 token 的启动 URL 写入权限为 600 的运行时文件，
-   并显示健康状态。
+   并显示健康状态。修改 `startOnLogin` 后，用同一行的 **Apply settings** 应用。
 3. **Open UI**：用 Omarchy Web App 窗口（或默认浏览器，取决于 `openMode`）打开 UI。
 
 等价的终端操作：
@@ -93,7 +94,7 @@ HB=~/.config/omarchy/plugins/io.github.fieldnote-ops.harnessbar/bin/harnessbar
 | `proxy` | string | `""` | 可选 HTTP(S) 代理，作用于服务与更新检查，如 `http://127.0.0.1:7890` |
 | `dshPath` | path | `""` | 可选 `dsh` 绝对路径；留空自动探测 mise、`PATH`、`~/.local/bin` |
 | `openMode` | enum | `Webapp` | `Webapp` 用 `omarchy-launch-or-focus-webapp`；`Browser` 用 `xdg-open` |
-| `startOnLogin` | enum | `Off` | 安装/修复服务时应用；`On` 会执行 `systemctl --user enable` |
+| `startOnLogin` | enum | `Off` | 由 **Install service** / **Apply settings** 应用；`On` 会执行 `systemctl --user enable` |
 | `refreshSec` | integer | `5` | 状态轮询间隔（秒） |
 | `glyph` | string | `󰚩` | 状态栏 Nerd Font 图标；填 `DS` 可用纯文字标签 |
 
@@ -113,7 +114,7 @@ omarchy bar set io.github.fieldnote-ops.harnessbar startOnLogin On
 | `o` / `c` / `s` / `r` / `g` / `u` | 打开 UI / 复制 URL / 启停 / 重启 / 日志 / 检查更新 |
 | `Esc` | 关闭面板 |
 
-停止、重启、更新、移除服务等破坏性操作都会先弹出确认。**Copy URL 复制的是凭据**：
+停止、重启、更新、接管（Adopt）、移除服务等破坏性操作都会先弹出确认。**Stop** 只对 harnessbar 管理的单元开放，legacy 单元需先修复。**Copy URL 复制的是凭据**：
 URL 里带有每次进程唯一的启动 token。
 
 也可以走 shell IPC（适合绑定快捷键或脚本）：
@@ -146,8 +147,10 @@ omarchy-shell shell call io.github.fieldnote-ops.harnessbar refresh ''
 - 启动 URL 是凭据：只存放在 `$XDG_RUNTIME_DIR`（600），不打印进 journal、不在
   面板中明文展示，只有你主动点击 Copy 才复制。请同样注意截图、剪贴板历史与日志分享。
 - 更新操作复用你已有的 mise/npm，不会静默下载。
-- Omarchy marketplace 安全基线会为本插件报告 `service-management` 与
-  `package-manager` 能力；这些行为在本文档中公开说明。
+- Omarchy 自动安全基线会报告本插件有意使用的能力：`service-management`
+  （systemd 用户单元）与 `package-manager`（mise/npm 更新动作），以及来自
+  否定性文档的 `privilege` 和来自开发章节 clone 命令的 `remote-build`。这些行为
+  在本文档中公开说明。
 
 ## 卸载
 
@@ -190,8 +193,10 @@ Ubuntu 上运行同一套门禁。
 
 ## 兼容性
 
-已在 Omarchy 4.0.6（Quattro）与 `@deepseek-ai/dsh` 0.2.1-rc.2 上验证
-（2026-10-20）。插件依赖 `dsh web` 的文档化启动契约：`dsh web:` 行是就绪信号，
+已在 Omarchy 4.0.6（Quattro）与 `@deepseek-ai/dsh` 0.2.1-rc.2 上完成真机验证
+（2026-10-20）：非零状态栏槽位、面板开合、实时状态、legacy 单元识别与一次原地
+服务修复。生命周期动作由 stub systemd 测试覆盖；开发期间未重启承载当前 GUI 的
+线上服务。插件依赖 `dsh web` 的文档化启动契约：`dsh web:` 行是就绪信号，
 URL 带进程 token，`--port 0` 表示自动选端口。只要 DSH 继续打印该行就能工作；
 否则面板会报告明确错误而不是猜测。
 

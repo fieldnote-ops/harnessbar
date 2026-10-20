@@ -19,7 +19,13 @@ expect_eq "repository validates" "$?" "0"
 id="$(jq -r '.id' manifest.json)"
 expect_eq "plugin id" "$id" "io.github.fieldnote-ops.harnessbar"
 
-expect_eq "version" "$(jq -r '.version' manifest.json)" "0.2.0"
+version="$(jq -r '.version' manifest.json)"
+if [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  pass "version format"
+else
+  fail "version format (got '$version')"
+fi
+expect_contains "changelog documents the version" "$(cat CHANGELOG.md)" "## $version"
 expect_eq "kinds" "$(jq -r '.kinds | join(",")' manifest.json)" "bar-widget"
 expect_eq "bar entry point" "$(jq -r '.entryPoints.barWidget' manifest.json)" "BarWidget.qml"
 expect_eq "bar entry point exists" "$([[ -f BarWidget.qml ]] && printf yes || printf no)" "yes"

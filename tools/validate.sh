@@ -55,8 +55,8 @@ jq -e '(.kinds | index("bar-widget")) == null or (.entryPoints.barWidget != null
 
 section="$(jq -r '.barWidget.defaultSection // ""' "$manifest")"
 case "$section" in
-  ""|left|centerBegin|center|centerEnd|tray|right) ;;
-  *) fail "invalid barWidget.defaultSection: $section" ;;
+  ""|left|center|right) ;;
+  *) fail "invalid barWidget.defaultSection: $section (official schema: left, center, right)" ;;
 esac
 
 jq -e '(.barWidget.defaults // {}) as $d | (.barWidget.schema // []) as $s | [$s[].key] - [$d | keys[]] | length == 0' "$manifest" >/dev/null 2>&1 \
@@ -67,8 +67,12 @@ if find . -type l -not -path './.git/*' | grep -q .; then
 fi
 
 [[ -f README.md ]] || fail "missing README.md"
+[[ -f README.zh-CN.md ]] || fail "missing README.zh-CN.md"
 [[ -f LICENSE ]] || fail "missing LICENSE"
+[[ -f preview.png ]] || fail "missing root preview.png (marketplace preview)"
+grep -q 'preview.png' README.md || fail "README.md does not reference the preview image"
 [[ -x bin/harnessbar ]] || fail "bin/harnessbar must be executable"
 [[ -f systemd/dsh-web.service.template ]] || fail "missing systemd unit template"
+grep -q "^## $version" CHANGELOG.md 2>/dev/null || fail "CHANGELOG.md has no section for $version"
 
 printf 'validate: OK (%s %s)\n' "$id" "$version"
