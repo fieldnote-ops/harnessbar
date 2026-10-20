@@ -21,6 +21,14 @@ UNIT_FILE="$UNIT_DIR/$UNIT_NAME"
 UNIT_TEMPLATE="$ROOT/systemd/dsh-web.service.template"
 HOST="127.0.0.1"
 
+# omarchy-shell and systemd user services may start with a minimal PATH; make
+# mise-managed node tools (npm) discoverable for update checks without changing
+# the user's shell configuration.
+case ":${PATH:-}:" in
+  *":$HOME/.local/share/mise/shims:"*) ;;
+  *) export PATH="$HOME/.local/share/mise/shims:${PATH:-/usr/local/bin:/usr/bin:/bin}" ;;
+esac
+
 usage() {
   cat <<'EOF'
 Usage: harnessbar <command> [args]
@@ -175,7 +183,9 @@ detect_manager() {
       ;;
   esac
   if command -v npm >/dev/null 2>&1; then
-    if npm ls -g --depth=0 --json 2>/dev/null | grep -q '@deepseek-ai/dsh'; then
+    local cache
+    cache="$(npm_private_cache)"
+    if env npm_config_cache="$cache" npm ls -g --depth=0 --json 2>/dev/null | grep -q '@deepseek-ai/dsh'; then
       printf 'npm\n'
       return 0
     fi
@@ -183,9 +193,17 @@ detect_manager() {
   printf 'manual\n'
 }
 
+npm_private_cache() {
+  local dir
+  dir="${XDG_CACHE_HOME:-$HOME/.cache}/harnessbar/npm"
+  mkdir -p -- "$dir" 2>/dev/null && chmod 700 -- "$dir" 2>/dev/null || true
+  printf '%s\n' "$dir"
+}
+
 npm_latest() {
-  local latest
-  latest="$(run_with_proxy npm view @deepseek-ai/dsh version 2>/dev/null | tail -n 1 || true)"
+  local latest cache
+  cache="$(npm_private_cache)"
+  latest="$(run_with_proxy env npm_config_cache="$cache" npm view @deepseek-ai/dsh version 2>/dev/null | tail -n 1 || true)"
   latest="${latest//[[:space:]]/}"
   printf '%s\n' "$latest"
 }
@@ -612,7 +630,9 @@ cmd_update() {
         || fail "mise update failed; run it in a terminal to see the error."
       ;;
     npm)
-      run_with_proxy npm install -g "@deepseek-ai/dsh@$latest" >/dev/null 2>&1 \
+      local cache
+      cache="$(npm_private_cache)"
+      run_with_proxy env npm_config_cache="$cache" npm install -g "@deepseek-ai/dsh@$latest" >/dev/null 2>&1 \
         || fail "npm update failed; run it in a terminal to see the error."
       ;;
     *)
