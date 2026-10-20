@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Test stub for the Omarchy web-app launcher.
+set -u
+
+printf '%s\n' "$*" >> "${STUB_OPEN_LOG:-/dev/null}"
+exit 0

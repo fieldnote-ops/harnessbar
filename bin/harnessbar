@@ -1,0 +1,714 @@
+#!/usr/bin/env bash
+# harnessbar — manage the local DeepSeek Harness web UI (dsh web) as a
+# systemd --user service for the Omarchy bar widget.
+#
+# This file is both the CLI the QML panel calls and the service entry point
+# (`harnessbar run`, started by dsh-web.service).
+#
+# It never uses sudo/pkexec, never downloads and executes remote code, and
+# never stores a PID in a shared temporary directory. The launch token printed
+# by `dsh web` is captured into an owner-only runtime file and kept out of
+# journald.
+set -u -o pipefail
+
+PLUGIN_ID="io.github.fieldnote-ops.harnessbar"
+UNIT_NAME="dsh-web.service"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+HOME="${HOME:-$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)}"
+SHELL_CONFIG="$HOME/.config/omarchy/shell.json"
+UNIT_DIR="$HOME/.config/systemd/user"
+UNIT_FILE="$UNIT_DIR/$UNIT_NAME"
+UNIT_TEMPLATE="$ROOT/systemd/dsh-web.service.template"
+HOST="127.0.0.1"
+
+usage() {
+  cat <<'EOF'
+Usage: harnessbar <command> [args]
+
+Commands:
+  status                 Print one JSON status object (used by the bar widget).
+  start | stop | restart Start, stop, or restart the dsh web service.
+  open                   Start if needed, then open the web UI.
+  copy-url               Copy the tokenized web UI URL to the clipboard.
+  logs [lines]           Print the service journal tail (tokens redacted).
+  setup-service          Install/replace the systemd --user unit.
+      --replace-legacy   Replace an existing non-harnessbar dsh-web unit.
+      --force            Replace any existing dsh-web unit.
+  remove-service         Remove the harnessbar-managed unit (DSH data untouched).
+  update --check         Print installed/latest dsh versions as JSON.
+  update                 Update dsh with mise or npm, then restart if running.
+  version                Print the detected dsh version.
+  url                    Print the tokenized web UI URL (credential).
+  run                    Service entry point; started by dsh-web.service.
+  help                   Show this help.
+
+Settings live in ~/.config/omarchy/shell.json in this widget's entry and can
+be changed with `omarchy bar set io.github.fieldnote-ops.harnessbar <key> <value>`.
+EOF
+}
+
+json_ok() {
+  jq -n --arg message "${1:-ok}" '{ok: true, message: $message}'
+}
+
+fail() {
+  local message="${1:-failed}"
+  jq -n --arg message "$message" '{ok: false, message: $message}'
+  exit 1
+}
+
+hb_state_dir() {
+  if [[ -n ${RUNTIME_DIRECTORY:-} ]]; then
+    printf '%s\n' "$RUNTIME_DIRECTORY"
+  elif [[ -n ${XDG_RUNTIME_DIR:-} ]]; then
+    printf '%s\n' "$XDG_RUNTIME_DIR/harnessbar"
+  else
+    printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/harnessbar"
+  fi
+}
+
+ensure_state_dir() {
+  local dir
+  dir="$(hb_state_dir)"
+  mkdir -p -- "$dir" 2>/dev/null || return 1
+  chmod 700 -- "$dir" 2>/dev/null || true
+  printf '%s\n' "$dir"
+}
+
+configured_port() {
+  local value
+  value="$(setting port 3080)"
+  [[ $value =~ ^[0-9]+$ ]] || value=3080
+  printf '%s\n' "$value"
+}
+
+setting() {
+  local key="$1" fallback="${2:-}" value=""
+  if [[ -r $SHELL_CONFIG ]] && command -v jq >/dev/null 2>&1; then
+    value="$(jq -r --arg id "$PLUGIN_ID" --arg key "$key" \
+      '.. | objects | select(.id? == $id) | .[$key] // empty' \
+      "$SHELL_CONFIG" 2>/dev/null | head -n 1 || true)"
+  fi
+  if [[ -n $value ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "$fallback"
+  fi
+}
+
+proxy_url() {
+  setting proxy ""
+}
+
+# Sets DSH_RESOLVED and DSH_SOURCE. Callers that run this in a subshell lose
+# the globals, so always call it directly and read the variables afterwards.
+resolve_dsh() {
+  local candidate=""
+  DSH_RESOLVED=""
+  DSH_SOURCE=""
+  candidate="$(setting dshPath "")"
+  if [[ -n $candidate && -x $candidate ]]; then
+    DSH_RESOLVED="$candidate"
+    DSH_SOURCE=settings
+    return 0
+  fi
+  if [[ -n ${DSH_BIN:-} && -x ${DSH_BIN:-} ]]; then
+    DSH_RESOLVED="$DSH_BIN"
+    DSH_SOURCE=environment
+    return 0
+  fi
+  candidate="$HOME/.local/share/mise/shims/dsh"
+  if [[ -x $candidate ]]; then
+    DSH_RESOLVED="$candidate"
+    DSH_SOURCE=mise-shim
+    return 0
+  fi
+  if command -v mise >/dev/null 2>&1; then
+    candidate="$(mise which dsh 2>/dev/null || true)"
+    if [[ -n $candidate && -x $candidate ]]; then
+      DSH_RESOLVED="$candidate"
+      DSH_SOURCE=mise
+      return 0
+    fi
+  fi
+  if command -v dsh >/dev/null 2>&1; then
+    candidate="$(command -v dsh)"
+    if [[ -n $candidate && -x $candidate ]]; then
+      DSH_RESOLVED="$candidate"
+      DSH_SOURCE=path
+      return 0
+    fi
+  fi
+  return 1
+}
+
+dsh_version_cached() {
+  local dsh="${1:-}" dir cache now then
+  dir="$(hb_state_dir)"
+  cache="$dir/version"
+  if [[ -s $cache ]]; then
+    then="$(stat -c %Y -- "$cache" 2>/dev/null || printf 0)"
+    now="$(date +%s 2>/dev/null || printf 0)"
+    if [[ $then =~ ^[0-9]+$ && $now =~ ^[0-9]+$ ]] && (( now - then < 60 )); then
+      head -n 1 -- "$cache" 2>/dev/null || true
+      return 0
+    fi
+  fi
+  if [[ -z $dsh ]] && resolve_dsh; then dsh="$DSH_RESOLVED"; fi
+  [[ -n $dsh ]] || return 0
+  local version
+  version="$("$dsh" --version 2>/dev/null | head -n 1 || true)"
+  if [[ -n $version ]]; then
+    ensure_state_dir >/dev/null 2>&1 || true
+    printf '%s\n' "$version" > "$cache" 2>/dev/null || true
+    printf '%s\n' "$version"
+  fi
+}
+
+detect_manager() {
+  local dsh="$1" real
+  real="$(readlink -f -- "$dsh" 2>/dev/null || printf '%s' "$dsh")"
+  case $real in
+    */.local/share/mise/*|*/mise/installs/*)
+      printf 'mise\n'
+      return 0
+      ;;
+  esac
+  if command -v npm >/dev/null 2>&1; then
+    if npm ls -g --depth=0 --json 2>/dev/null | grep -q '@deepseek-ai/dsh'; then
+      printf 'npm\n'
+      return 0
+    fi
+  fi
+  printf 'manual\n'
+}
+
+npm_latest() {
+  local latest
+  latest="$(run_with_proxy npm view @deepseek-ai/dsh version 2>/dev/null | tail -n 1 || true)"
+  latest="${latest//[[:space:]]/}"
+  printf '%s\n' "$latest"
+}
+
+run_with_proxy() {
+  local proxy
+  proxy="$(proxy_url)"
+  if [[ -n $proxy ]]; then
+    env HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" ALL_PROXY="$proxy" \
+      http_proxy="$proxy" https_proxy="$proxy" all_proxy="$proxy" \
+      NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" "$@"
+  else
+    "$@"
+  fi
+}
+
+systemd_bus() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl --user show-environment >/dev/null 2>&1
+}
+
+unit_state_raw() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl --user is-active "$UNIT_NAME" 2>/dev/null || true
+}
+
+unit_active() {
+  [[ "$(unit_state_raw)" == "active" ]]
+}
+
+unit_is_managed() {
+  [[ -f $UNIT_FILE ]] && grep -q 'Managed by harnessbar' -- "$UNIT_FILE" 2>/dev/null
+}
+
+unit_is_legacy() {
+  [[ -f $UNIT_FILE ]] || return 1
+  unit_is_managed && return 1
+  grep -q 'dsh-web-run' -- "$UNIT_FILE" 2>/dev/null
+}
+
+read_url() {
+  local dir
+  dir="$(hb_state_dir)"
+  [[ -s "$dir/url" ]] && head -n 1 -- "$dir/url" 2>/dev/null || true
+}
+
+url_port() {
+  local url="${1:-}" port=""
+  if [[ $url =~ :([0-9]{1,5})(/|\?|$) ]]; then
+    port="${BASH_REMATCH[1]}"
+  fi
+  printf '%s\n' "$port"
+}
+
+port_open() {
+  local port="${1:-}"
+  [[ $port =~ ^[0-9]+$ ]] || return 1
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnH "sport = :$port" 2>/dev/null | grep -q . && return 0
+  fi
+  (exec 3<>"/dev/tcp/127.0.0.1/$port") >/dev/null 2>&1 || return 1
+  return 0
+}
+
+port_pid() {
+  local port="${1:-}" pid=""
+  [[ $port =~ ^[0-9]+$ ]] || return 1
+  command -v ss >/dev/null 2>&1 || return 1
+  pid="$(ss -ltnpH "sport = :$port" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -n 1 | cut -d= -f2 || true)"
+  [[ -n $pid ]] && printf '%s\n' "$pid"
+}
+
+wait_url() {
+  local timeout="${1:-30}" dir
+  dir="$(hb_state_dir)"
+  local i
+  for ((i = 0; i < timeout * 10; i++)); do
+    [[ -s "$dir/url" ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+redact() {
+  sed -E \
+    -e 's/([?&]token=)[^ &"'"'"']+/\1***/g' \
+    -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+/-]+=*/\1***/g'
+}
+
+bool_json() {
+  if [[ "$1" == "true" ]]; then printf 'true'; else printf 'false'; fi
+}
+
+# --- commands ---------------------------------------------------------------
+
+cmd_status() {
+  local dsh="" dsh_source="" version="" url="" actual_port="" probe_port="" port_json="null"
+  local pid="" pid_json="null" up=false state="stopped" error="" running=false
+  local unit_installed=false managed=false legacy=false supervised=false url_present=false
+  local unit_state="unavailable" sd=false
+
+  if resolve_dsh; then
+    dsh="$DSH_RESOLVED"
+    dsh_source="$DSH_SOURCE"
+  fi
+  [[ -n $dsh ]] && version="$(dsh_version_cached "$dsh" 2>/dev/null || true)"
+
+  unit_state="$(unit_state_raw)"
+  [[ -n $unit_state ]] && sd=true
+  [[ -f $UNIT_FILE ]] && unit_installed=true
+  unit_is_managed && managed=true
+  unit_is_legacy && legacy=true
+
+  url="$(read_url)"
+  [[ -n $url ]] && url_present=true
+  actual_port="$(url_port "$url")"
+  if [[ -n $actual_port ]]; then
+    probe_port="$actual_port"
+  else
+    probe_port="$(configured_port)"
+    [[ $probe_port == "0" ]] && probe_port=""
+  fi
+  if [[ -n $probe_port ]] && port_open "$probe_port"; then
+    up=true
+    pid="$(port_pid "$probe_port" || true)"
+  fi
+  [[ -n $probe_port ]] && port_json="$probe_port"
+  if [[ -n $pid ]]; then
+    pid_json="$pid"
+  fi
+
+  if [[ -z $dsh ]]; then
+    state="no-dsh"
+    error="dsh was not found. Install it with mise/npm, or set the dshPath setting."
+  elif $sd && [[ $unit_state == "active" ]]; then
+    supervised=true
+    if [[ -z $url ]]; then
+      state="starting"
+    elif $up; then
+      state="running"
+      running=true
+    else
+      state="degraded"
+      running=true
+      error="The service is active but its port is not accepting connections yet."
+    fi
+  elif $sd && [[ $unit_state == "activating" || $unit_state == "reloading" ]]; then
+    state="starting"
+  elif $sd && [[ $unit_state == "failed" ]]; then
+    state="error"
+    error="dsh-web.service failed. Open Logs or run: journalctl --user -u $UNIT_NAME"
+  elif $up && [[ -n $url ]]; then
+    state="running"
+    running=true
+    error=""
+  elif $sd && $unit_installed; then
+    state="stopped"
+    if [[ -n $url ]]; then
+      state="stale"
+      error="A stale launch URL was found but the service is not running."
+    fi
+  elif ! $unit_installed; then
+    state="no-service"
+    error="The background service is not installed yet. Install it to manage dsh web from the panel."
+  else
+    state="stopped"
+  fi
+
+  if $legacy && [[ $state != "running" && $state != "degraded" ]]; then
+    error="${error:+$error }A legacy dsh-web unit from ~/.local/bin was found; repair it to manage it here."
+  fi
+
+  jq -n \
+    --arg state "$state" \
+    --arg unit "$UNIT_NAME" \
+    --arg unit_state "$unit_state" \
+    --arg version "$version" \
+    --arg dsh "$dsh" \
+    --arg dsh_source "$dsh_source" \
+    --arg host "$HOST" \
+    --arg error "$error" \
+    --argjson running "$(bool_json "$running")" \
+    --argjson supervised "$(bool_json "$supervised")" \
+    --argjson unit_installed "$(bool_json "$unit_installed")" \
+    --argjson managed "$(bool_json "$managed")" \
+    --argjson legacy "$(bool_json "$legacy")" \
+    --argjson url_present "$(bool_json "$url_present")" \
+    --argjson port "$port_json" \
+    --argjson pid "$pid_json" \
+    '{
+      ok: true,
+      state: $state,
+      running: $running,
+      supervised: $supervised,
+      unit: $unit,
+      unit_state: $unit_state,
+      unit_installed: $unit_installed,
+      managed: $managed,
+      legacy: $legacy,
+      host: $host,
+      port: $port,
+      pid: $pid,
+      url_present: $url_present,
+      version: $version,
+      dsh: $dsh,
+      dsh_source: $dsh_source,
+      error: $error
+    }'
+}
+
+cmd_start() {
+  resolve_dsh || fail "dsh was not found. Install it first, or set the dshPath setting."
+  if unit_active; then
+    json_ok "already running"
+    return 0
+  fi
+  if ! unit_is_managed; then
+    if unit_is_legacy; then
+      fail "A legacy dsh-web unit is installed. Run setup-service --replace-legacy (panel: Repair service)."
+    fi
+    fail "The background service is not installed. Run setup-service first."
+  fi
+  systemd_bus || fail "Cannot reach the systemd user manager."
+  systemctl --user start "$UNIT_NAME" >/dev/null 2>&1 || fail "systemctl start failed; open Logs for details."
+  if wait_url 30; then
+    json_ok "started"
+  else
+    fail "The service started but did not publish a URL in time; open Logs for details."
+  fi
+}
+
+cmd_stop() {
+  if ! unit_active; then
+    json_ok "already stopped"
+    return 0
+  fi
+  [[ -f $UNIT_FILE ]] || fail "This dsh-web service is not managed by harnessbar; stop it from a terminal."
+  systemd_bus || fail "Cannot reach the systemd user manager."
+  systemctl --user stop "$UNIT_NAME" >/dev/null 2>&1 || fail "systemctl stop failed."
+  json_ok "stopped"
+}
+
+cmd_restart() {
+  unit_is_managed || fail "Install the background service first (panel: Install service)."
+  systemd_bus || fail "Cannot reach the systemd user manager."
+  if unit_active; then
+    systemctl --user restart "$UNIT_NAME" >/dev/null 2>&1 || fail "systemctl restart failed."
+  else
+    systemctl --user start "$UNIT_NAME" >/dev/null 2>&1 || fail "systemctl start failed."
+  fi
+  if wait_url 30; then
+    json_ok "restarted"
+  else
+    fail "The service restarted but did not publish a URL in time; open Logs for details."
+  fi
+}
+
+cmd_toggle() {
+  if unit_active; then cmd_stop; else cmd_start; fi
+}
+
+cmd_open() {
+  local url
+  url="$(read_url)"
+  if [[ -z $url ]]; then
+    local start_out
+    start_out="$(cmd_start)"
+    if [[ $? -ne 0 ]]; then
+      printf '%s\n' "$start_out"
+      exit 1
+    fi
+    url="$(read_url)"
+  fi
+  [[ -n $url ]] || fail "No launch URL is available yet; wait a moment and retry."
+  local mode
+  mode="$(setting openMode Webapp)"
+  case $mode in
+    Browser)
+      if command -v xdg-open >/dev/null 2>&1; then
+        setsid xdg-open "$url" >/dev/null 2>&1 &
+      else
+        fail "xdg-open is not available."
+      fi
+      ;;
+    *)
+      if command -v omarchy-launch-or-focus-webapp >/dev/null 2>&1; then
+        setsid omarchy-launch-or-focus-webapp "DeepSeek Harness" "$url" >/dev/null 2>&1 &
+      elif command -v omarchy-launch-webapp >/dev/null 2>&1; then
+        setsid omarchy-launch-webapp "$url" >/dev/null 2>&1 &
+      elif command -v xdg-open >/dev/null 2>&1; then
+        setsid xdg-open "$url" >/dev/null 2>&1 &
+      else
+        fail "No web-app launcher is available."
+      fi
+      ;;
+  esac
+  json_ok "opened"
+}
+
+cmd_copy_url() {
+  local url
+  url="$(read_url)"
+  [[ -n $url ]] || fail "The web UI is not running; start it first."
+  if command -v wl-copy >/dev/null 2>&1; then
+    printf '%s' "$url" | wl-copy >/dev/null 2>&1 || fail "wl-copy failed."
+  elif command -v xclip >/dev/null 2>&1; then
+    printf '%s' "$url" | xclip -selection clipboard >/dev/null 2>&1 || fail "xclip failed."
+  elif command -v xsel >/dev/null 2>&1; then
+    printf '%s' "$url" | xsel --clipboard --input >/dev/null 2>&1 || fail "xsel failed."
+  else
+    fail "No clipboard tool found (install wl-clipboard)."
+  fi
+  json_ok "Token URL copied to the clipboard. Treat it as a credential."
+}
+
+cmd_logs() {
+  local lines="${1:-120}"
+  [[ $lines =~ ^[0-9]+$ ]] || lines=120
+  command -v journalctl >/dev/null 2>&1 || fail "journalctl is not available."
+  journalctl --user -u "$UNIT_NAME" -n "$lines" --no-pager -o cat 2>&1 | redact
+}
+
+cmd_setup_service() {
+  local replace=""
+  while (($# > 0)); do
+    case $1 in
+      --replace-legacy) replace="legacy" ;;
+      --force) replace="force" ;;
+      *) fail "unknown setup-service option: $1" ;;
+    esac
+    shift
+  done
+  [[ -f $UNIT_TEMPLATE ]] || fail "Unit template is missing: $UNIT_TEMPLATE"
+  resolve_dsh || fail "dsh was not found. Install it first, or set the dshPath setting."
+  systemd_bus || fail "Cannot reach the systemd user manager."
+
+  if [[ -e $UNIT_FILE ]]; then
+    if unit_is_managed; then
+      :
+    elif unit_is_legacy && [[ $replace == "legacy" || $replace == "force" ]]; then
+      cp -p -- "$UNIT_FILE" "$UNIT_FILE.bak.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    elif [[ $replace == "force" ]]; then
+      cp -p -- "$UNIT_FILE" "$UNIT_FILE.bak.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    else
+      fail "An unmanaged $UNIT_NAME already exists. Re-run with --replace-legacy (legacy helper) or --force."
+    fi
+  fi
+
+  mkdir -p -- "$UNIT_DIR" 2>/dev/null || fail "Cannot create $UNIT_DIR"
+  local tmp
+  tmp="$UNIT_FILE.tmp.$$"
+  sed "s|@ROOT@|${ROOT}|g" -- "$UNIT_TEMPLATE" > "$tmp" 2>/dev/null || fail "Cannot render the unit template."
+  install -m 0644 -- "$tmp" "$UNIT_FILE" 2>/dev/null || { rm -f -- "$tmp"; fail "Cannot write $UNIT_FILE"; }
+  rm -f -- "$tmp"
+
+  systemctl --user daemon-reload >/dev/null 2>&1 || fail "systemd daemon-reload failed."
+  if [[ "$(setting startOnLogin Off)" == "On" ]]; then
+    systemctl --user enable "$UNIT_NAME" >/dev/null 2>&1 || fail "systemctl enable failed."
+  else
+    systemctl --user disable "$UNIT_NAME" >/dev/null 2>&1 || true
+  fi
+  if unit_active; then
+    json_ok "Service installed. Restart it to apply the new unit."
+  else
+    json_ok "Service installed. Start it when ready."
+  fi
+}
+
+cmd_remove_service() {
+  unit_is_managed || fail "Refusing to remove $UNIT_NAME: it is not managed by harnessbar."
+  systemd_bus || fail "Cannot reach the systemd user manager."
+  if unit_active; then
+    systemctl --user stop "$UNIT_NAME" >/dev/null 2>&1 || true
+  fi
+  systemctl --user disable "$UNIT_NAME" >/dev/null 2>&1 || true
+  rm -f -- "$UNIT_FILE" "$UNIT_FILE.tmp."* 2>/dev/null || true
+  systemctl --user daemon-reload >/dev/null 2>&1 || true
+  local dir
+  dir="$(hb_state_dir)"
+  rm -f -- "$dir/url" "$dir/version" 2>/dev/null || true
+  json_ok "Service removed. DeepSeek Harness data in ~/.dsh was not touched."
+}
+
+cmd_update() {
+  local mode="apply"
+  while (($# > 0)); do
+    case $1 in
+      --check) mode="check" ;;
+      *) fail "unknown update option: $1" ;;
+    esac
+    shift
+  done
+  local dsh current manager latest updatable="false"
+  resolve_dsh || fail "dsh was not found. Install it first, or set the dshPath setting."
+  dsh="$DSH_RESOLVED"
+  current="$("$dsh" --version 2>/dev/null | head -n 1 || true)"
+  manager="$(detect_manager "$dsh")"
+  latest="$(npm_latest)"
+  [[ -n $latest ]] || fail "Could not resolve the latest @deepseek-ai/dsh version from npm. If your network needs a proxy, set the proxy setting."
+  [[ -n $current && $current != "$latest" && $manager != "manual" ]] && updatable="true"
+
+  if [[ $mode == "check" ]]; then
+    jq -n \
+      --arg current "$current" \
+      --arg latest "$latest" \
+      --arg manager "$manager" \
+      --argjson updatable "$updatable" \
+      '{ok: true, current: $current, latest: $latest, manager: $manager, updatable: $updatable}'
+    return 0
+  fi
+
+  case $manager in
+    mise)
+      run_with_proxy mise use -g "npm:@deepseek-ai/dsh@$latest" >/dev/null 2>&1 \
+        || fail "mise update failed; run it in a terminal to see the error."
+      ;;
+    npm)
+      run_with_proxy npm install -g "@deepseek-ai/dsh@$latest" >/dev/null 2>&1 \
+        || fail "npm update failed; run it in a terminal to see the error."
+      ;;
+    *)
+      fail "dsh is not managed by mise or npm here; update it with its own installer."
+      ;;
+  esac
+  local dir
+  dir="$(hb_state_dir)"
+  rm -f -- "$dir/version" 2>/dev/null || true
+  local restarted="false"
+  if unit_active; then
+    systemctl --user restart "$UNIT_NAME" >/dev/null 2>&1 && restarted="true" || true
+  fi
+  if [[ $restarted == "true" ]]; then
+    json_ok "Updated to $latest and restarted the service."
+  else
+    json_ok "Updated to $latest."
+  fi
+}
+
+cmd_version() {
+  resolve_dsh || fail "dsh was not found."
+  "$DSH_RESOLVED" --version 2>/dev/null | head -n 1
+}
+
+cmd_url() {
+  local url
+  url="$(read_url)"
+  [[ -n $url ]] || fail "The web UI is not running."
+  printf '%s\n' "$url"
+}
+
+cmd_run() {
+  local dir dsh port proxy
+  dir="$(ensure_state_dir)" || { printf 'harnessbar: cannot create a private state directory\n' >&2; exit 1; }
+  URL_FILE="$dir/url"
+  VERSION_CACHE="$dir/version"
+  rm -f -- "$URL_FILE"
+
+  if ! resolve_dsh; then
+    printf 'harnessbar: dsh was not found. Install it, or set the dshPath setting.\n' >&2
+    exit 127
+  fi
+  dsh="$DSH_RESOLVED"
+  port="$(configured_port)"
+  proxy="$(proxy_url)"
+  if [[ -n $proxy ]]; then
+    export HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" ALL_PROXY="$proxy" \
+      http_proxy="$proxy" https_proxy="$proxy" all_proxy="$proxy" \
+      NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1"
+    printf 'harnessbar: using configured proxy %s\n' "$proxy" >&2
+  fi
+  "$dsh" --version > "$VERSION_CACHE" 2>/dev/null || true
+
+  printf 'harnessbar: starting dsh web on %s:%s\n' "$HOST" "$port" >&2
+  trap 'rm -f -- "$URL_FILE" 2>/dev/null || true' EXIT INT TERM
+
+  "$dsh" web --no-open --host "$HOST" --port "$port" 2>&1 | while IFS= read -r line; do
+    if [[ $line == *"http://"* && $line == *"token="* ]]; then
+      local url="${line#*http://}"
+      url="http://${url%% *}"
+      local shown_port=""
+      if [[ $url =~ ^http://[^/:]+:([0-9]+) ]]; then
+        shown_port="${BASH_REMATCH[1]}"
+      fi
+      printf '%s\n' "$url" > "$URL_FILE.tmp" 2>/dev/null \
+        && chmod 600 -- "$URL_FILE.tmp" 2>/dev/null \
+        && mv -f -- "$URL_FILE.tmp" "$URL_FILE" 2>/dev/null
+      printf 'dsh web: listening on %s:%s (launch token captured and hidden)\n' "$HOST" "$shown_port"
+    elif [[ $line == *"token="* ]]; then
+      printf '%s\n' "$line" | redact
+    else
+      printf '%s\n' "$line"
+    fi
+  done
+  exit $?
+}
+
+# --- dispatch ---------------------------------------------------------------
+
+command="${1:-}"
+[[ $# -gt 0 ]] && shift
+case "$command" in
+  status) cmd_status ;;
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  restart) cmd_restart ;;
+  toggle) cmd_toggle ;;
+  open) cmd_open ;;
+  url) cmd_url ;;
+  copy-url) cmd_copy_url ;;
+  logs) cmd_logs "${1:-120}" ;;
+  setup-service) cmd_setup_service "$@" ;;
+  remove-service) cmd_remove_service ;;
+  update) cmd_update "$@" ;;
+  version) cmd_version ;;
+  run) cmd_run ;;
+  help | --help | -h) usage ;;
+  "")
+    usage >&2
+    exit 2
+    ;;
+  *)
+    printf 'harnessbar: unknown command: %s\n' "$command" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

@@ -1,0 +1,31 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the plugin
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          sudo apt-get install -y qt6-declarative-dev-tools || true
+          qmllint --version || true
+
+      - name: Validate manifest and repository layout
+        run: bash tools/validate.sh
+
+      - name: Shell syntax
+        run: bash -n bin/harnessbar
+
+      - name: Tests
+        run: bash tests/run_tests.sh

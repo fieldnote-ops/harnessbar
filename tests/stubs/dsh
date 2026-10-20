@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Test stub for the dsh CLI.
+set -u
+
+case "${1:-}" in
+  --version)
+    printf '%s\n' "${STUB_DSH_VERSION:-9.9.9}"
+    ;;
+  web)
+    shift
+    printf 'dsh web: http://127.0.0.1:%s/?token=%s\n' "${STUB_DSH_PORT:-12345}" "${STUB_DSH_TOKEN:-stub-secret}"
+    sleep "${STUB_DSH_SLEEP:-0.1}"
+    ;;
+  *)
+    exit 0
+    ;;
+esac

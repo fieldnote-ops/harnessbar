@@ -1,0 +1,25 @@
+# Managed by harnessbar (io.github.fieldnote-ops.harnessbar).
+# Regenerate with: bin/harnessbar setup-service
+# Remove with:     bin/harnessbar remove-service
+[Unit]
+Description=DeepSeek Harness web UI (harnessbar)
+Documentation=https://github.com/fieldnote-ops/harnessbar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart="@ROOT@/bin/harnessbar" run
+WorkingDirectory=%h
+Environment=PATH=%h/.local/share/mise/shims:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NO_PROXY=localhost,127.0.0.1,::1
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+RuntimeDirectory=harnessbar
+RuntimeDirectoryMode=0700
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

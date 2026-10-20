@@ -1,0 +1,6 @@
+# Local build leftovers
+*.log
+*.bak
+*.bak.*
+.desktop-build/
+.DS_Store

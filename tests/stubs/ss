@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Test stub for ss, used to simulate a listener.
+set -u
+
+open_file="${STUB_SS_OPEN_FILE:-}"
+if [[ -n $open_file && -f $open_file ]]; then
+  printf 'LISTEN 0 4096 127.0.0.1:%s 0.0.0.0:* users:(("dsh",pid=4242,fd=21))\n' "${STUB_SS_PORT:-12345}"
+fi
+exit 0

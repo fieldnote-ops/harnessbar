@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Test stub for npm.
+set -u
+
+printf 'npm' >> "${STUB_LOG:-/dev/null}"
+printf ' %s' "$@" >> "${STUB_LOG:-/dev/null}"
+printf '\n' >> "${STUB_LOG:-/dev/null}"
+
+case "${1:-}" in
+  view)
+    printf '%s\n' "${STUB_NPM_LATEST:-9.9.10}"
+    ;;
+  ls)
+    printf '%s\n' '{"dependencies":{"@deepseek-ai/dsh":{"version":"9.9.9"}}}'
+    ;;
+  install)
+    exit 0
+    ;;
+esac
+exit 0

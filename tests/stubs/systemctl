@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Test stub for systemctl --user. Records calls and simulates unit state.
+set -u
+
+log="${STUB_LOG:-/dev/null}"
+state_file="${STUB_STATE_FILE:-}"
+url_file="${STUB_URL_FILE:-}"
+
+printf 'systemctl' >> "$log"
+printf ' %s' "$@" >> "$log"
+printf '\n' >> "$log"
+
+command=""
+for arg in "$@"; do
+  case "$arg" in
+    --user|--quiet|--no-pager) continue ;;
+    show-environment|is-active|start|stop|restart|daemon-reload|enable|disable)
+      command="$arg"
+      ;;
+  esac
+done
+
+case "$command" in
+  show-environment)
+    exit 0
+    ;;
+  is-active)
+    if [[ -n $state_file && -f $state_file ]]; then
+      cat "$state_file"
+    else
+      printf 'inactive\n'
+    fi
+    ;;
+  start|restart)
+    [[ -n $state_file ]] && printf 'active\n' > "$state_file"
+    if [[ -n $url_file ]]; then
+      printf 'http://127.0.0.1:%s/?token=stub-secret\n' "${STUB_URL_PORT:-12345}" > "$url_file"
+      chmod 600 "$url_file" 2>/dev/null || true
+    fi
+    if [[ -n ${STUB_SS_OPEN_FILE:-} ]]; then
+      : > "$STUB_SS_OPEN_FILE"
+    fi
+    ;;
+  stop)
+    [[ -n $state_file ]] && printf 'inactive\n' > "$state_file"
+    [[ -n $url_file ]] && rm -f "$url_file"
+    [[ -n ${STUB_SS_OPEN_FILE:-} ]] && rm -f "$STUB_SS_OPEN_FILE"
+    ;;
+  daemon-reload|enable|disable)
+    ;;
+esac
+exit 0

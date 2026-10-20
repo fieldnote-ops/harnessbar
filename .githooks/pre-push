@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Pre-push hook: run the local preflight (manifest, tests, QML checks).
+# Enable once with: git config core.hooksPath .githooks
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+exec bash "$root/tools/preflight.sh"

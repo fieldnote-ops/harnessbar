@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.fieldnote-ops.harnessbar",
+  "name": "DeepSeek Harness",
+  "version": "0.2.0",
+  "author": "FIELD NOTE",
+  "license": "MIT",
+  "homepage": "https://github.com/fieldnote-ops/harnessbar",
+  "description": "Service-grade control for the local DeepSeek Harness (dsh web) UI from the Omarchy bar: status, start/stop, logs, updates, proxy, and settings.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "DeepSeek Harness",
+    "description": "Run and manage the local dsh web service: health, start/stop, logs, updates, proxy, and settings from one bar icon.",
+    "category": "Developer Tools",
+    "aliases": ["dsh", "deepseek", "harness"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "port": 3080,
+      "proxy": "",
+      "dshPath": "",
+      "openMode": "Webapp",
+      "startOnLogin": "Off",
+      "refreshSec": 5,
+      "glyph": "󰚩"
+    },
+    "schema": [
+      {
+        "key": "port",
+        "type": "integer",
+        "label": "Web port",
+        "description": "Listener port for dsh web. 0 lets the OS pick a free port.",
+        "min": 0,
+        "max": 65535,
+        "step": 1,
+        "defaultValue": 3080
+      },
+      {
+        "key": "proxy",
+        "type": "string",
+        "label": "Proxy URL",
+        "description": "Optional HTTP(S) proxy for the background service and update checks, e.g. http://127.0.0.1:7890.",
+        "defaultValue": ""
+      },
+      {
+        "key": "dshPath",
+        "type": "path",
+        "label": "dsh executable",
+        "description": "Optional absolute path to dsh. Leave empty to auto-detect mise, PATH, and ~/.local/bin.",
+        "defaultValue": ""
+      },
+      {
+        "key": "openMode",
+        "type": "enum",
+        "label": "Open the UI in",
+        "options": ["Webapp", "Browser"],
+        "defaultValue": "Webapp"
+      },
+      {
+        "key": "startOnLogin",
+        "type": "enum",
+        "label": "Start service on login",
+        "description": "Applied when the background service is installed or repaired.",
+        "options": ["Off", "On"],
+        "defaultValue": "Off"
+      },
+      {
+        "key": "refreshSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 2,
+        "max": 300,
+        "step": 1,
+        "defaultValue": 5
+      },
+      {
+        "key": "glyph",
+        "type": "string",
+        "label": "Nerd Font glyph",
+        "description": "Bar glyph. Use any Nerd Font symbol, or the letters DS for a plain label.",
+        "defaultValue": "󰚩"
+      }
+    ]
+  }
+}

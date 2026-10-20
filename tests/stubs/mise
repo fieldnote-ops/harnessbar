@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Test stub for mise.
+set -u
+
+printf 'mise' >> "${STUB_LOG:-/dev/null}"
+printf ' %s' "$@" >> "${STUB_LOG:-/dev/null}"
+printf '\n' >> "${STUB_LOG:-/dev/null}"
+
+case "${1:-}" in
+  which)
+    printf '%s\n' "${STUB_DSH_PATH:-/nonexistent/dsh}"
+    ;;
+  use)
+    exit 0
+    ;;
+esac
+exit 0

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Test stub for journalctl.
+set -u
+
+printf 'harnessbar: started\n'
+printf 'dsh web: http://127.0.0.1:12345/?token=super-secret-token\n'
+printf 'dsh web: ready\n'

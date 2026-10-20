@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Test stub for wl-copy.
+set -u
+
+cat > "${STUB_CLIPBOARD_FILE:-/dev/null}"
