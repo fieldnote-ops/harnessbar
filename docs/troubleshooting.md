@@ -73,6 +73,22 @@ its connection and running agent tasks may be interrupted. That is why the
 panel asks for confirmation. Session data lives in `~/.dsh` and survives; reopen
 the UI afterwards.
 
+## Update checks fail
+
+Update checks run `npm view @deepseek-ai/dsh version` with your optional
+`proxy` setting and a private npm download cache under
+`${XDG_CACHE_HOME:-~/.cache}/harnessbar/npm`. The private cache exists so an
+unmounted drive or an unwritable global npm cache cannot break updates. If the
+check still fails, verify the proxy URL and that `npm` itself works in your
+terminal:
+
+```sh
+npm view @deepseek-ai/dsh version
+```
+
+The update action only supports mise- and npm-managed `dsh` installations; a
+manually installed copy is reported as `manual` and must be updated by hand.
+
 ## Copy URL does nothing
 
 Install `wl-clipboard` (for Wayland) or `xclip`/`xsel` (XWayland). The panel
