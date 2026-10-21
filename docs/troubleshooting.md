@@ -112,6 +112,14 @@ blank, the launcher or browser may have refused the local file; check the
 browser console and confirm the runtime directory is `$XDG_RUNTIME_DIR/harnessbar`.
 The page is deleted about 20 seconds after launch; opening again recreates it.
 
+## An old browser process still shows the launch token in its argv
+
+Versions before 0.2.2 passed the tokenized URL directly to the browser, so a
+browser process launched by them keeps that token in `/proc/<pid>/cmdline`
+until it exits. Close the DeepSeek Harness window (or the browser) and reopen
+it from the panel; restarting `dsh-web.service` also invalidates the old token.
+New opens never pass the token as an argument.
+
 ## Copy URL does nothing
 
 Install `wl-clipboard` (for Wayland) or `xclip`/`xsel` (XWayland). The panel

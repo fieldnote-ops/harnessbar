@@ -150,6 +150,9 @@ omarchy-shell shell call io.github.fieldnote-ops.harnessbar refresh ''
   下仅属主可读的 `file://` 重定向页，只把该文件路径交给启动器，并在约 20 秒后删除。
   因此 helper、启动器和浏览器的 `/proc/<pid>/cmdline` 里都没有凭据；token 仍会出现在
   浏览器地址栏/历史中（这是打开页面本身所必需的）。
+- **从 0.2.1 或更早版本升级**：旧插件启动的浏览器进程可能仍把旧 token 留在其进程参数中，
+  直到该浏览器进程退出。关闭 DeepSeek Harness 窗口/浏览器后从面板重新打开即可消除；
+  重启 `dsh-web.service` 也会让旧 token 失效。新打开的窗口始终走私有重定向页。
 - 更新操作复用你已有的 mise/npm，不会静默下载。
 - Omarchy 自动安全基线会报告本插件有意使用的能力：`service-management`
   （systemd 用户单元）与 `package-manager`（mise/npm 更新动作），以及来自

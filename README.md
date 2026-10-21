@@ -164,6 +164,11 @@ is detected and can be repaired instead of duplicated.
   The token therefore does not appear in `/proc/<pid>/cmdline` for the helper,
   the launcher, or the browser; it does of course appear in the browser's own
   address bar/history while the page is open.
+- **Upgrading from 0.2.1 or earlier:** a browser window launched by the old
+  plugin may still carry the old launch token in its process arguments until
+  that browser process exits. Close the DeepSeek Harness window/browser once
+  and reopen it from the panel; restarting `dsh-web.service` also rotates the
+  old token. New opens always use the private redirect page.
 - The update action uses your existing mise/npm installation; nothing is
   downloaded silently.
 - Omarchy's automated marketplace baseline reports the capabilities this plugin

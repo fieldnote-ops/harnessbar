@@ -15,6 +15,9 @@ Security hardening for the Open UI handoff after marketplace review.
 - `xdg-open`/browser mode uses the same private redirect page.
 - Tests cover token-free launcher argv, page permissions, redirect content,
   reserved-character escaping, and page cleanup (82 helper assertions).
+- Upgrade note: a browser window launched by 0.2.1 or earlier may keep the old
+  token in its argv until that browser process exits; close and reopen it (or
+  restart `dsh-web.service` to rotate the token).
 
 ## 0.2.1 — 2026-10-20
 
