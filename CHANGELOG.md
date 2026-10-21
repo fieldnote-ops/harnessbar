@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.1 — 2026-10-21
+
+Marketplace-review hardening for proxy credentials.
+
+- The panel now passes the proxy to the helper over stdin; the helper stages it
+  in an owner-only runtime file and updates `shell.json` through `jq --rawfile`.
+  The proxy URL (which may contain user:password) no longer appears in any
+  process argument.
+- dsh update commands receive the proxy through environment variables on the
+  child process instead of `env NAME=VALUE ...` arguments, so the proxy cannot
+  be recovered from readable procfs command lines.
+- Non-secret settings (port, dshPath, startOnLogin) still go through
+  `omarchy bar set`; startOnLogin is applied to the managed unit on save.
+- Tests assert the proxy is absent from the omarchy and jq argv, and that it
+  lands in shell.json; docs explain the stdin path.
+
+
 ## 0.3.0 — 2026-10-21
 
 Settings and onboarding release. Scope stays "local dsh web service"; TUI,

@@ -94,15 +94,20 @@ HB=~/.config/omarchy/plugins/io.github.fieldnote-ops.harnessbar/bin/harnessbar
 ## Settings
 
 Settings live inline in `~/.config/omarchy/shell.json`, in this widget's entry.
-The panel's **Settings → Edit** form writes them through `omarchy bar set`;
-the CLI remains the source of truth and works the same way. Port and proxy
+The panel's **Settings → Edit** form writes non-secret values through
+`omarchy bar set` and writes the proxy into `shell.json` through an
+owner-only staging file (`jq --rawfile`), so a proxy containing
+`user:password` never appears in a process argument. The CLI remains the
+source of truth and works the same way. Port and proxy
 changes need a **Restart**; `startOnLogin` is applied when the settings are
 saved (or with **Re-apply unit**).
 
 The proxy is **direct by default** (empty). Set it only when your network needs
 a local proxy; the example below uses a generic port. A proxy URL containing
 credentials is stored in plaintext in `shell.json` (and therefore readable by
-your user account and local tools) — avoid it on shared machines.
+your user account and local tools) — avoid it on shared machines. The panel
+passes it over stdin and the helper stages it in a 0600 file before writing;
+dsh update commands receive it through environment variables, not argv.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|

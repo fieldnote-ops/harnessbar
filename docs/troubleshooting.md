@@ -37,7 +37,9 @@ Common causes:
   ```
   `0` lets the OS pick a free port; the panel then shows the actual port.
 - The proxy setting is malformed. Use a full URL (`http://127.0.0.1:8080`), not
-  a bare `host:port`. The panel validates the scheme before saving.
+  a bare `host:port`. The panel validates the scheme before saving; credentials
+  in the URL are fine, since the panel passes them over stdin and they are
+  stored plaintext in `shell.json`.
 
 ## The agent cannot reach the DeepSeek API
 

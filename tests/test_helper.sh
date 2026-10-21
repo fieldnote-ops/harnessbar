@@ -357,24 +357,45 @@ assert_contains "npm command copied" "$(cat "$STUB_CLIPBOARD_FILE")" "npm instal
 out="$("$HELPER" copy-install-command pnpm 2>/dev/null)"
 assert_eq "copy-install-command rejects unknown manager" "$?" "1"
 
-# 15d. save-settings writes through the Omarchy CLI
+# 15d. save-settings writes the proxy via stdin and the rest via the CLI
 setup_env
 "$HELPER" setup-service >/dev/null 2>&1
 : > "$STUB_LOG"
-out="$("$HELPER" save-settings --proxy http://127.0.0.1:8080 --port 7331 --dsh-path "$STUB_DSH_PATH" --start-on-login On 2>/dev/null)"
+cat > "$TESTROOT/bin/jq" <<'JQEOF'
+#!/usr/bin/env bash
+printf 'jq' >> "${JQ_LOG:-/dev/null}"
+printf ' %q' "$@" >> "${JQ_LOG:-/dev/null}"
+printf '\n' >> "${JQ_LOG:-/dev/null}"
+exec /usr/bin/jq "$@"
+JQEOF
+chmod +x "$TESTROOT/bin/jq"
+export JQ_LOG="$TESTROOT/jq.log"
+: > "$JQ_LOG"
+out="$(printf '%s' 'http://user:secret@127.0.0.1:8080' | "$HELPER" save-settings --proxy-stdin --port 7331 --dsh-path "$STUB_DSH_PATH" --start-on-login On 2>/dev/null)"
 assert_exit "save-settings" 0 $?
 omarchy_log="$(cat "$STUB_LOG")"
 assert_contains "save-settings saves port" "$omarchy_log" "omarchy bar set io.github.fieldnote-ops.harnessbar port 7331 --json"
-assert_contains "save-settings saves proxy" "$omarchy_log" "omarchy bar set io.github.fieldnote-ops.harnessbar proxy http://127.0.0.1:8080"
 assert_contains "save-settings saves dshPath" "$omarchy_log" "omarchy bar set io.github.fieldnote-ops.harnessbar dshPath $STUB_DSH_PATH"
 assert_contains "save-settings saves startOnLogin" "$omarchy_log" "omarchy bar set io.github.fieldnote-ops.harnessbar startOnLogin On"
 assert_contains "save-settings enables the unit" "$omarchy_log" "systemctl --user enable"
+assert_not_contains "proxy is not in the CLI argv" "$omarchy_log" "user:secret"
+assert_not_contains "proxy is not in jq argv" "$(cat "$JQ_LOG")" "user:secret"
+assert_eq "proxy is written to shell.json" \
+  "$(jq -r --arg id "$PLUGIN_ID" '.. | objects | select(.id? == $id) | .proxy' "$HOME/.config/omarchy/shell.json")" \
+  "http://user:secret@127.0.0.1:8080"
+# clearing the proxy is allowed and writes an empty string
+out="$(printf '' | "$HELPER" save-settings --proxy-stdin --port 7331 --dsh-path "" --start-on-login Off 2>/dev/null)"
+assert_exit "save-settings clears the proxy" 0 $?
+assert_eq "empty proxy written to shell.json" \
+  "$(jq -r --arg id "$PLUGIN_ID" '.. | objects | select(.id? == $id) | .proxy' "$HOME/.config/omarchy/shell.json")" ""
+rm -f "$TESTROOT/bin/jq"
+hash -r
 
 # 15e. save-settings validation rejects bad input
 out="$("$HELPER" save-settings --port 70000 2>/dev/null)"
 assert_eq "save-settings rejects an out-of-range port" "$?" "1"
 assert_contains "port error message" "$out" "Invalid port"
-out="$("$HELPER" save-settings --proxy ftp://example 2>/dev/null)"
+out="$(printf '%s' 'ftp://example' | "$HELPER" save-settings --proxy-stdin --port 7331 --dsh-path "" --start-on-login Off 2>/dev/null)"
 assert_eq "save-settings rejects a non-http proxy" "$?" "1"
 assert_contains "proxy error message" "$out" "Invalid proxy URL"
 out="$("$HELPER" save-settings --dsh-path relative/path 2>/dev/null)"

@@ -55,6 +55,19 @@ else
   fail "journal TextEdit must set TextEdit.PlainText"
 fi
 
+if grep -q '"--proxy-stdin"' BarWidget.qml \
+   && ! grep -q '"--proxy", String(proxy)' BarWidget.qml; then
+  pass "panel sends the proxy over stdin, not argv"
+else
+  fail "panel still passes the proxy as a process argument"
+fi
+
+if ! grep -q 'env HTTP_PROXY' bin/harnessbar && grep -q -- '--rawfile proxy' bin/harnessbar; then
+  pass "helper keeps proxy secrets out of argv (env assignments + rawfile)"
+else
+  fail "helper may pass proxy secrets through argv"
+fi
+
 if grep -q 'id: proxyField' Panel.qml && grep -q 'Save settings' Panel.qml \
    && grep -q 'copyInstallCommand' Panel.qml && grep -q 'autoCheckUpdates' Panel.qml; then
   pass "panel exposes a settings editor, install-command copy, and quiet update check"

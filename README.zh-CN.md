@@ -87,13 +87,16 @@ HB=~/.config/omarchy/plugins/io.github.fieldnote-ops.harnessbar/bin/harnessbar
 ## 设置
 
 设置存放在 `~/.config/omarchy/shell.json` 中本插件的条目里。面板的
-**Settings → Edit** 表单通过 `omarchy bar set` 写入；CLI 用法完全等价。
+**Settings → Edit** 表单对非敏感项使用 `omarchy bar set`；代理则通过
+stdin 传入 helper，写入 0600 私有文件后再用 `jq --rawfile` 更新 `shell.json`，
+因此含 `user:password` 的代理不会出现在任何进程参数中。CLI 用法等价。
 修改 `port` 或 `proxy` 后需要 **Restart**；`startOnLogin` 在保存设置时立即生效
 （也可用 **Re-apply unit**）。
 
 代理默认是**空（直连）**，只有网络需要本地代理时才设置；文档示例使用通用端口。
 代理 URL 若包含账号密码，会以明文存入 `shell.json`（本机用户与工具可读），
-共享机器上请避免使用。
+共享机器上请避免使用。面板通过 stdin 传递代理，helper 先写入 0600 私有文件；
+dsh 更新命令则通过环境变量接收代理，而不是 argv。
 
 | 键 | 类型 | 默认值 | 含义 |
 |---|---|---|---|

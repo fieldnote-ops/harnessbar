@@ -22,6 +22,7 @@ BarWidget {
   property string lastAction: ""
   property bool updateCheckQuiet: false
   property double lastAutoCheckMs: 0
+  property string pendingStdin: ""
   readonly property bool updateAvailable: updateInfo && updateInfo.updatable === true
 
   // --- paths --------------------------------------------------------------
@@ -99,13 +100,14 @@ BarWidget {
   function toggle() { if (panelLoader.item) panelLoader.item.toggle() }
 
   // --- commands -----------------------------------------------------------
-  function runCommand(label, args, actionKey) {
+  function runCommand(label, args, actionKey, stdinPayload) {
     if (busy || actionProcess.running || updateCheckProcess.running) return false
     busy = true
     busyLabel = label
     lastAction = actionKey || ""
     actionError = ""
     lastMessage = ""
+    pendingStdin = stdinPayload === undefined || stdinPayload === null ? "" : String(stdinPayload)
     actionProcess.command = [root.helper].concat(args)
     actionProcess.running = true
     actionTimeout.restart()
@@ -126,13 +128,14 @@ BarWidget {
     return runCommand("copying…", ["copy-install-command", String(manager)], "copy-install")
   }
   function saveSettings(proxy, port, dshPath, startOnLogin) {
+    // Proxy may carry credentials: it goes over stdin, not argv.
     return runCommand("saving settings…", [
       "save-settings",
-      "--proxy", String(proxy),
+      "--proxy-stdin",
       "--port", String(port),
       "--dsh-path", String(dshPath),
       "--start-on-login", String(startOnLogin)
-    ], "save-settings")
+    ], "save-settings", String(proxy))
   }
   function setupService() {
     var args = ["setup-service"]
@@ -194,7 +197,14 @@ BarWidget {
     id: actionProcess
     stdout: StdioCollector { id: actionOut; waitForEnd: true }
     stderr: StdioCollector { id: actionErr; waitForEnd: true }
+    onStarted: function() {
+      if (root.pendingStdin !== "") {
+        actionProcess.write(root.pendingStdin + "\n")
+        root.pendingStdin = ""
+      }
+    }
     onExited: function(exitCode) {
+      root.pendingStdin = ""
       actionTimeout.stop()
       root.busy = false
       root.busyLabel = ""

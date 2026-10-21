@@ -42,8 +42,8 @@ Commands:
   open                   Start if needed, then open the web UI.
   copy-url               Copy the tokenized web UI URL to the clipboard.
   copy-install-command   Copy a dsh install command (mise|npm).
-  save-settings          Save panel settings via `omarchy bar set`:
-                         [--proxy URL] [--port N] [--dsh-path PATH]
+  save-settings          Save panel settings (proxy arrives on stdin):
+                         --proxy-stdin [--port N] [--dsh-path PATH]
                          [--start-on-login On|Off]
   logs [lines]           Print the service journal tail (tokens redacted).
   setup-service          Install/replace the systemd --user unit.
@@ -205,7 +205,7 @@ detect_manager() {
   if command -v npm >/dev/null 2>&1; then
     local cache
     cache="$(npm_private_cache)"
-    if env npm_config_cache="$cache" npm ls -g --depth=0 --json 2>/dev/null | grep -q '@deepseek-ai/dsh'; then
+    if (export npm_config_cache="$cache"; npm ls -g --depth=0 --json 2>/dev/null) | grep -q '@deepseek-ai/dsh'; then
       printf 'npm\n'
       return 0
     fi
@@ -223,7 +223,7 @@ npm_private_cache() {
 npm_latest() {
   local latest cache
   cache="$(npm_private_cache)"
-  latest="$(run_with_proxy env npm_config_cache="$cache" npm view @deepseek-ai/dsh version 2>/dev/null | tail -n 1 || true)"
+  latest="$( ( export npm_config_cache="$cache"; run_with_proxy npm view @deepseek-ai/dsh version 2>/dev/null ) | tail -n 1 || true)"
   latest="${latest//[[:space:]]/}"
   printf '%s\n' "$latest"
 }
@@ -232,7 +232,9 @@ run_with_proxy() {
   local proxy
   proxy="$(proxy_url)"
   if [[ -n $proxy ]]; then
-    env HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" ALL_PROXY="$proxy" \
+    # Assignments go into the child's environment; `env NAME=VALUE cmd` would
+    # put the proxy URL (possibly user:password) into argv.
+    HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" ALL_PROXY="$proxy" \
       http_proxy="$proxy" https_proxy="$proxy" all_proxy="$proxy" \
       NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1" "$@"
   else
@@ -666,14 +668,14 @@ cmd_copy_install() {
 # canonical. Port/proxy take effect on the next service restart; start on login
 # is applied to the managed unit immediately.
 cmd_save_settings() {
-  local port="" proxy="" dsh_path="" start_on_login=""
-  local set_port=0 set_proxy=0 set_dsh=0 set_start=0
+  local proxy="" port="" dsh_path="" start_on_login=""
+  local set_proxy=0 set_port=0 set_dsh=0 set_start=0
   while (($# > 0)); do
     case $1 in
+      --proxy-stdin)
+        set_proxy=1; shift ;;
       --port)
         port="${2:-}"; set_port=1; shift 2 ;;
-      --proxy)
-        proxy="${2:-}"; set_proxy=1; shift 2 ;;
       --dsh-path)
         dsh_path="${2:-}"; set_dsh=1; shift 2 ;;
       --start-on-login)
@@ -682,6 +684,12 @@ cmd_save_settings() {
         fail "unknown save-settings option: $1" ;;
     esac
   done
+  if (( set_proxy )); then
+    # The proxy may include user:password. It arrives on stdin and is written
+    # to an owner-only file before jq reads it, so it never appears in argv.
+    IFS= read -r proxy || true
+    proxy="${proxy%$'\r'}"
+  fi
   if (( set_port )) && { [[ ! $port =~ ^[0-9]+$ ]] || (( port > 65535 )); }; then
     fail "Invalid port: use an integer from 0 to 65535."
   fi
@@ -695,12 +703,11 @@ cmd_save_settings() {
   if (( set_start )) && [[ $start_on_login != "On" && $start_on_login != "Off" ]]; then
     fail "startOnLogin must be On or Off."
   fi
-  command -v omarchy >/dev/null 2>&1 || fail "omarchy CLI not found."
+  if (( set_port || set_dsh || set_start )); then
+    command -v omarchy >/dev/null 2>&1 || fail "omarchy CLI not found."
+  fi
   if (( set_port )); then
     omarchy bar set "$PLUGIN_ID" port "$port" --json >/dev/null 2>&1 || fail "Could not save the port."
-  fi
-  if (( set_proxy )); then
-    omarchy bar set "$PLUGIN_ID" proxy "$proxy" >/dev/null 2>&1 || fail "Could not save the proxy."
   fi
   if (( set_dsh )); then
     omarchy bar set "$PLUGIN_ID" dshPath "$dsh_path" >/dev/null 2>&1 || fail "Could not save dshPath."
@@ -708,12 +715,39 @@ cmd_save_settings() {
   fi
   if (( set_start )); then
     omarchy bar set "$PLUGIN_ID" startOnLogin "$start_on_login" >/dev/null 2>&1 || fail "Could not save startOnLogin."
-    if unit_is_managed && systemd_bus; then
-      if [[ $start_on_login == "On" ]]; then
-        systemctl --user enable "$UNIT_NAME" >/dev/null 2>&1 || fail "Settings saved, but enabling start on login failed."
-      else
-        systemctl --user disable "$UNIT_NAME" >/dev/null 2>&1 || true
-      fi
+  fi
+  if (( set_proxy )); then
+    command -v jq >/dev/null 2>&1 || fail "jq is required to save the proxy."
+    local state_dir secret tmp mode
+    state_dir="$(hb_state_dir)" || fail "Could not create the runtime directory."
+    secret="$state_dir/settings-proxy.$$"
+    tmp="$state_dir/settings.json.$$"
+    ( umask 077; printf '%s' "$proxy" > "$secret" ) || { rm -f -- "$secret"; fail "Could not stage the proxy setting."; }
+    if ! jq --arg id "$PLUGIN_ID" --rawfile proxy "$secret" '
+        walk(if type == "object" and (.id? == $id) then
+          .proxy = ($proxy | rtrimstr("\n"))
+        else . end)
+      ' "$SHELL_CONFIG" > "$tmp" 2>/dev/null; then
+      rm -f -- "$secret" "$tmp"
+      fail "Could not update shell.json."
+    fi
+    if ! jq -e --arg id "$PLUGIN_ID" '.. | objects | select(.id? == $id) | has("proxy")' "$tmp" >/dev/null 2>&1; then
+      rm -f -- "$secret" "$tmp"
+      fail "Plugin entry not found in shell.json; re-add the widget to the bar."
+    fi
+    mode="$(stat -c %a -- "$SHELL_CONFIG" 2>/dev/null || true)"
+    [[ -n $mode ]] && chmod "$mode" -- "$tmp" 2>/dev/null || true
+    if ! mv -f -- "$tmp" "$SHELL_CONFIG"; then
+      rm -f -- "$secret" "$tmp"
+      fail "Could not write shell.json."
+    fi
+    rm -f -- "$secret"
+  fi
+  if (( set_start )) && unit_is_managed && systemd_bus; then
+    if [[ $start_on_login == "On" ]]; then
+      systemctl --user enable "$UNIT_NAME" >/dev/null 2>&1 || fail "Settings saved, but enabling start on login failed."
+    else
+      systemctl --user disable "$UNIT_NAME" >/dev/null 2>&1 || true
     fi
   fi
   json_ok "Settings saved. Restart the service to apply port/proxy changes."
@@ -859,7 +893,7 @@ cmd_update() {
     npm)
       local cache
       cache="$(npm_private_cache)"
-      run_with_proxy env npm_config_cache="$cache" npm install -g "@deepseek-ai/dsh@$latest" >/dev/null 2>&1 \
+      ( export npm_config_cache="$cache"; run_with_proxy npm install -g "@deepseek-ai/dsh@$latest" ) >/dev/null 2>&1 \
         || fail "npm update failed; run it in a terminal to see the error."
       ;;
     *)
