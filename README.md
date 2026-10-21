@@ -158,6 +158,12 @@ is detected and can be repaired instead of duplicated.
   mode 600, never printed into the journal, never shown in the panel, and only
   copied when you ask. Treat screenshots, clipboard history, and shared logs
   accordingly.
+- **Open UI does not put the token in process arguments.** It stages a
+  private, owner-only `file://` redirect page under `$XDG_RUNTIME_DIR`, passes
+  only that file path to the launcher, and removes the page shortly afterwards.
+  The token therefore does not appear in `/proc/<pid>/cmdline` for the helper,
+  the launcher, or the browser; it does of course appear in the browser's own
+  address bar/history while the page is open.
 - The update action uses your existing mise/npm installation; nothing is
   downloaded silently.
 - Omarchy's automated marketplace baseline reports the capabilities this plugin

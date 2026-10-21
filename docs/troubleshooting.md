@@ -104,6 +104,14 @@ must be updated by hand. Proxy userinfo is stripped from the service log line,
 and the panel's journal view redacts common token, Authorization, and Bearer
 formats plus URL credentials.
 
+## Open UI opens a blank/local page
+
+`Open UI` passes the browser a private `file://` redirect page instead of the
+token URL, so the token never appears in process arguments. If that page stays
+blank, the launcher or browser may have refused the local file; check the
+browser console and confirm the runtime directory is `$XDG_RUNTIME_DIR/harnessbar`.
+The page is deleted about 20 seconds after launch; opening again recreates it.
+
 ## Copy URL does nothing
 
 Install `wl-clipboard` (for Wayland) or `xclip`/`xsel` (XWayland). The panel

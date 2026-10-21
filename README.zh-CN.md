@@ -146,6 +146,10 @@ omarchy-shell shell call io.github.fieldnote-ops.harnessbar refresh ''
 - 服务是普通 systemd **用户**单元，不会在用户登出后继续运行。
 - 启动 URL 是凭据：只存放在 `$XDG_RUNTIME_DIR`（600），不打印进 journal、不在
   面板中明文展示，只有你主动点击 Copy 才复制。请同样注意截图、剪贴板历史与日志分享。
+- **Open UI 不会把 token 放进进程参数**：它把 token URL 写入 `$XDG_RUNTIME_DIR`
+  下仅属主可读的 `file://` 重定向页，只把该文件路径交给启动器，并在约 20 秒后删除。
+  因此 helper、启动器和浏览器的 `/proc/<pid>/cmdline` 里都没有凭据；token 仍会出现在
+  浏览器地址栏/历史中（这是打开页面本身所必需的）。
 - 更新操作复用你已有的 mise/npm，不会静默下载。
 - Omarchy 自动安全基线会报告本插件有意使用的能力：`service-management`
   （systemd 用户单元）与 `package-manager`（mise/npm 更新动作），以及来自

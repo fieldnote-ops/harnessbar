@@ -515,6 +515,57 @@ cmd_toggle() {
   if unit_active; then cmd_stop; else cmd_start; fi
 }
 
+sweep_launch_pages() {
+  local dir
+  dir="$(hb_state_dir)"
+  find "$dir" -maxdepth 1 \( -name 'open-*.html' -o -name 'open-*.html.tmp' \) -mmin +2 -delete 2>/dev/null || true
+}
+
+# Write a private file:// page that redirects to the tokenized launch URL.
+# The browser/web-app launcher only ever receives this file path, so the token
+# never appears in a process argument (visible through /proc/<pid>/cmdline).
+write_launch_page() {
+  local url="$1" dir page html_url js_url
+  if ! printf '%s' "$url" | grep -Eq '^https?://[^[:space:]<>]+$'; then
+    fail "The launch URL contains characters that cannot be staged safely; refusing to open it."
+  fi
+  dir="$(ensure_state_dir)" || fail "Cannot create a private runtime directory for the launch page."
+  page="$dir/open-$(date +%s)-$$.html"
+  if [[ $page == *[[:space:]%#?]* ]]; then
+    fail "The runtime path cannot form a safe file URL; set XDG_RUNTIME_DIR to a simple path."
+  fi
+  html_url="$(jq -Rn --arg u "$url" '$u|@html')"
+  js_url="$(jq -Rn --arg u "$url" '$u')"
+  if ! (umask 077 && printf '%s\n' \
+    '<!doctype html>' \
+    '<html><head><meta charset="utf-8">' \
+    "<meta http-equiv=\"refresh\" content=\"0;url=$html_url\">" \
+    '<title>DeepSeek Harness</title>' \
+    "<script>location.replace($js_url)</script>" \
+    '</head><body>Opening DeepSeek Harness…</body></html>' > "$page.tmp"); then
+    rm -f -- "$page.tmp" 2>/dev/null || true
+    fail "Cannot write the private launch page."
+  fi
+  if ! chmod 600 -- "$page.tmp" 2>/dev/null || ! mv -f -- "$page.tmp" "$page" 2>/dev/null; then
+    rm -f -- "$page.tmp" 2>/dev/null || true
+    fail "Cannot stage the private launch page."
+  fi
+  [[ -s $page ]] || fail "The private launch page is empty."
+  printf '%s\n' "$page"
+}
+
+schedule_launch_page_cleanup() {
+  local page="$1" ttl="${HARNESSBAR_OPEN_PAGE_TTL:-20}"
+  [[ $ttl =~ ^[0-9]+$ ]] || ttl=20
+  if command -v setsid >/dev/null 2>&1; then
+    if ! setsid --fork bash -c 'sleep "$1"; rm -f -- "$2"' harnessbar-page-cleanup "$ttl" "$page" >/dev/null 2>&1; then
+      bash -c 'sleep "$1"; rm -f -- "$2"' harnessbar-page-cleanup "$ttl" "$page" >/dev/null 2>&1 &
+    fi
+  else
+    bash -c 'sleep "$1"; rm -f -- "$2"' harnessbar-page-cleanup "$ttl" "$page" >/dev/null 2>&1 &
+  fi
+}
+
 cmd_open() {
   local url
   url="$(read_url)"
@@ -528,28 +579,35 @@ cmd_open() {
     url="$(read_url)"
   fi
   [[ -n $url ]] || fail "No launch URL is available yet; wait a moment and retry."
-  local mode
+
+  sweep_launch_pages
+  local page launch_uri mode
+  page="$(write_launch_page "$url")" || exit 1
+  launch_uri="file://$page"
   mode="$(setting openMode Webapp)"
   case $mode in
     Browser)
       if command -v xdg-open >/dev/null 2>&1; then
-        setsid xdg-open "$url" >/dev/null 2>&1 &
+        setsid xdg-open "$launch_uri" >/dev/null 2>&1 &
       else
+        rm -f -- "$page" 2>/dev/null || true
         fail "xdg-open is not available."
       fi
       ;;
     *)
       if command -v omarchy-launch-or-focus-webapp >/dev/null 2>&1; then
-        setsid omarchy-launch-or-focus-webapp "DeepSeek Harness" "$url" >/dev/null 2>&1 &
+        setsid omarchy-launch-or-focus-webapp "DeepSeek Harness" "$launch_uri" >/dev/null 2>&1 &
       elif command -v omarchy-launch-webapp >/dev/null 2>&1; then
-        setsid omarchy-launch-webapp "$url" >/dev/null 2>&1 &
+        setsid omarchy-launch-webapp "$launch_uri" >/dev/null 2>&1 &
       elif command -v xdg-open >/dev/null 2>&1; then
-        setsid xdg-open "$url" >/dev/null 2>&1 &
+        setsid xdg-open "$launch_uri" >/dev/null 2>&1 &
       else
+        rm -f -- "$page" 2>/dev/null || true
         fail "No web-app launcher is available."
       fi
       ;;
   esac
+  schedule_launch_page_cleanup "$page"
   json_ok "opened"
 }
 

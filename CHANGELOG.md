@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.2 — 2026-10-21
+
+Security hardening for the Open UI handoff after marketplace review.
+
+- **The launch token never appears in process arguments.** `Open UI` now writes
+  a private, owner-only `file://` redirect page under `$XDG_RUNTIME_DIR` and
+  hands the web-app/browser launcher only that file path. The page redirects to
+  the tokenized URL, so `/proc/<pid>/cmdline` contains no credential. The page
+  is removed after about 20 seconds, and stale pages are swept on the next open.
+- Meta-refresh and script URLs are escaped with `jq` so reserved characters in
+  the launch URL stay inert; URLs with unsupported characters are refused
+  instead of being passed as arguments.
+- `xdg-open`/browser mode uses the same private redirect page.
+- Tests cover token-free launcher argv, page permissions, redirect content,
+  reserved-character escaping, and page cleanup (82 helper assertions).
+
 ## 0.2.1 — 2026-10-20
 
 Hardening release after an independent review; no behaviour changes for the

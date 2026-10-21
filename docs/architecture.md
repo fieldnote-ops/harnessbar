@@ -121,7 +121,11 @@ helper falls back to the runtime URL plus listener probe and reports
 - No remote code execution: no `curl | sh`; the update path only calls the
   user's existing mise/npm with an explicit version.
 - Credential handling: the launch token never reaches the journal, the panel,
-  or the README screenshots; it is only copied on explicit request.
+  the README screenshots, or any process argument. `open` stages a private
+  redirect page under the runtime directory (mode 600 in a 700 directory) and
+  passes only the `file://` path to the launcher; the page redirects to the
+  tokenized URL and is removed after a short TTL. It is only copied on explicit
+  request.
 - Process control: no `/tmp` PID files and no signal delivery from untrusted
   state. `stop` goes through systemd.
 - The plugin runs unsandboxed inside the shell, like every Omarchy plugin; the

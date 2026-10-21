@@ -270,13 +270,14 @@ run_log="$(cat "$run_out")"
 assert_contains "run announces the listener" "$run_log" "launch token captured and hidden"
 assert_not_contains "run keeps the token out of the log" "$run_log" "stub-secret"
 
-# 15. open launches the Omarchy web app with the token URL
+# 15. open hands the browser a private redirect page, never the token URL
 setup_env
 write_shell_config "12345" "$STUB_DSH_PATH"
 printf 'active\n' > "$STUB_STATE_FILE"
 printf 'http://127.0.0.1:12345/?token=stub-secret\n' > "$STUB_URL_FILE"
 chmod 600 "$STUB_URL_FILE"
 : > "$STUB_SS_OPEN_FILE"
+export HARNESSBAR_OPEN_PAGE_TTL=1
 out="$("$HELPER" open 2>/dev/null)"
 assert_exit "open" 0 $?
 # `open` launches the web-app window detached; wait for the stub to record it.
@@ -284,7 +285,50 @@ for _ in $(seq 1 50); do
   [[ -s "$STUB_OPEN_LOG" ]] && break
   sleep 0.05
 done
-assert_contains "open used the web-app launcher" "$(cat "$STUB_OPEN_LOG" 2>/dev/null || true)" "DeepSeek Harness http://127.0.0.1:12345/?token=stub-secret"
+open_log="$(cat "$STUB_OPEN_LOG" 2>/dev/null || true)"
+assert_contains "open used the web-app launcher" "$open_log" "DeepSeek Harness file://"
+assert_not_contains "launcher argv must not contain the launch token" "$open_log" "stub-secret"
+assert_not_contains "launcher argv must not contain the token URL" "$open_log" "token="
+page_path="$(printf '%s' "$open_log" | sed -E 's#.*file://([^ ]+).*#\1#')"
+assert_file_exists "open staged a private redirect page" "$page_path"
+assert_eq "redirect page is owner-only" "$(stat -c %a "$page_path" 2>/dev/null)" "600"
+page_content="$(cat "$page_path" 2>/dev/null || true)"
+assert_contains "redirect page carries the launch URL" "$page_content" "token=stub-secret"
+assert_contains "redirect page is the DSH launch page" "$page_content" "DeepSeek Harness"
+assert_contains "redirect page uses a meta refresh" "$page_content" "http-equiv=\"refresh\""
+assert_contains "redirect page uses a JS redirect" "$page_content" "location.replace("
+unset HARNESSBAR_OPEN_PAGE_TTL
+for _ in $(seq 1 40); do
+  [[ -e $page_path ]] || break
+  sleep 0.1
+done
+if [[ -e $page_path ]]; then
+  fail "private redirect page was not removed after its TTL"
+else
+  pass "private redirect page is removed after its TTL"
+fi
+
+# 15b. URLs with reserved characters are safely embedded in the page
+setup_env
+write_shell_config "12345" "$STUB_DSH_PATH"
+printf 'active\n' > "$STUB_STATE_FILE"
+printf 'http://127.0.0.1:12345/?token=stub-secret&scope=x%%22y\n' > "$STUB_URL_FILE"
+chmod 600 "$STUB_URL_FILE"
+: > "$STUB_SS_OPEN_FILE"
+export HARNESSBAR_OPEN_PAGE_TTL=1
+out="$("$HELPER" open 2>/dev/null)"
+assert_exit "open with reserved characters" 0 $?
+for _ in $(seq 1 50); do
+  [[ -s "$STUB_OPEN_LOG" ]] && break
+  sleep 0.05
+done
+open_log="$(cat "$STUB_OPEN_LOG" 2>/dev/null || true)"
+assert_not_contains "reserved-character launch keeps token out of argv" "$open_log" "stub-secret"
+page_path="$(printf '%s' "$open_log" | sed -E 's#.*file://([^ ]+).*#\1#')"
+page_content="$(cat "$page_path" 2>/dev/null || true)"
+assert_contains "meta refresh escapes ampersands" "$page_content" "&amp;scope=x"
+assert_contains "JS redirect keeps a valid quoted string" "$page_content" "location.replace(\""
+unset HARNESSBAR_OPEN_PAGE_TTL
 
 # 16. startOnLogin is applied when setup-service is re-run on a managed unit
 setup_env
