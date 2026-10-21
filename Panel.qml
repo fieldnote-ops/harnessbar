@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
 import qs.Commons
@@ -44,7 +45,7 @@ Panel {
   property bool showLogs: false
   property string pendingAction: ""
   property string pendingMessage: ""
-  property bool settingsExpanded: true
+  property bool settingsExpanded: false
   property string proxyDraft: ""
   property string portDraft: ""
   property string dshPathDraft: ""
@@ -242,6 +243,7 @@ Panel {
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
         ColumnLayout {
           id: column
@@ -551,6 +553,26 @@ Panel {
               visible: root.settingsExpanded
               spacing: Style.space(5)
 
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(6)
+                Item { Layout.fillWidth: true }
+                Button {
+                  text: "Save settings"
+                  focusable: true
+                  bordered: true
+                  enabled: !!root.host && !root.busy
+                  onClicked: root.saveSettings()
+                }
+                Button {
+                  text: "Restart"
+                  focusable: true
+                  bordered: true
+                  enabled: !!root.host && !root.busy && root.unitInstalled
+                  onClicked: root.requestAction("restart")
+                }
+              }
+
               Text {
                 Layout.fillWidth: true
                 text: "Stored in shell.json. Port/proxy apply after Restart; start on login is applied when saving."
@@ -639,25 +661,6 @@ Panel {
                 wrapMode: Text.WordWrap
               }
 
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.space(6)
-                Item { Layout.fillWidth: true }
-                Button {
-                  text: "Save settings"
-                  focusable: true
-                  bordered: true
-                  enabled: !!root.host && !root.busy
-                  onClicked: root.saveSettings()
-                }
-                Button {
-                  text: "Restart"
-                  focusable: true
-                  bordered: true
-                  enabled: !!root.host && !root.busy && root.unitInstalled
-                  onClicked: root.requestAction("restart")
-                }
-              }
             }
           }
 
