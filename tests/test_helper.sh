@@ -344,6 +344,43 @@ assert_contains "meta refresh escapes ampersands" "$page_content" "&amp;scope=x"
 assert_contains "JS redirect keeps a valid quoted string" "$page_content" "location.replace(\""
 unset HARNESSBAR_OPEN_PAGE_TTL
 
+# 15c. copy-install-command copies the two supported install commands
+setup_env
+: > "$STUB_CLIPBOARD_FILE"
+out="$("$HELPER" copy-install-command mise 2>/dev/null)"
+assert_exit "copy-install-command mise" 0 $?
+assert_contains "mise command copied" "$(cat "$STUB_CLIPBOARD_FILE")" "mise use -g npm:@deepseek-ai/dsh@latest"
+: > "$STUB_CLIPBOARD_FILE"
+out="$("$HELPER" copy-install-command npm 2>/dev/null)"
+assert_exit "copy-install-command npm" 0 $?
+assert_contains "npm command copied" "$(cat "$STUB_CLIPBOARD_FILE")" "npm install -g @deepseek-ai/dsh@latest"
+out="$("$HELPER" copy-install-command pnpm 2>/dev/null)"
+assert_eq "copy-install-command rejects unknown manager" "$?" "1"
+
+# 15d. save-settings writes through the Omarchy CLI
+setup_env
+"$HELPER" setup-service >/dev/null 2>&1
+: > "$STUB_LOG"
+out="$("$HELPER" save-settings --proxy http://127.0.0.1:8080 --port 7331 --dsh-path "$STUB_DSH_PATH" --start-on-login On 2>/dev/null)"
+assert_exit "save-settings" 0 $?
+omarchy_log="$(cat "$STUB_LOG")"
+assert_contains "save-settings saves port" "$omarchy_log" "omarchy bar set io.github.fieldnote-ops.harnessbar port 7331 --json"
+assert_contains "save-settings saves proxy" "$omarchy_log" "omarchy bar set io.github.fieldnote-ops.harnessbar proxy http://127.0.0.1:8080"
+assert_contains "save-settings saves dshPath" "$omarchy_log" "omarchy bar set io.github.fieldnote-ops.harnessbar dshPath $STUB_DSH_PATH"
+assert_contains "save-settings saves startOnLogin" "$omarchy_log" "omarchy bar set io.github.fieldnote-ops.harnessbar startOnLogin On"
+assert_contains "save-settings enables the unit" "$omarchy_log" "systemctl --user enable"
+
+# 15e. save-settings validation rejects bad input
+out="$("$HELPER" save-settings --port 70000 2>/dev/null)"
+assert_eq "save-settings rejects an out-of-range port" "$?" "1"
+assert_contains "port error message" "$out" "Invalid port"
+out="$("$HELPER" save-settings --proxy ftp://example 2>/dev/null)"
+assert_eq "save-settings rejects a non-http proxy" "$?" "1"
+assert_contains "proxy error message" "$out" "Invalid proxy URL"
+out="$("$HELPER" save-settings --dsh-path relative/path 2>/dev/null)"
+assert_eq "save-settings rejects a relative dshPath" "$?" "1"
+assert_contains "dshPath error message" "$out" "absolute path"
+
 # 16. startOnLogin is applied when setup-service is re-run on a managed unit
 setup_env
 "$HELPER" setup-service >/dev/null 2>&1

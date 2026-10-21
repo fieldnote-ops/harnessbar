@@ -41,6 +41,10 @@ Commands:
   start | stop | restart Start, stop, or restart the dsh web service.
   open                   Start if needed, then open the web UI.
   copy-url               Copy the tokenized web UI URL to the clipboard.
+  copy-install-command   Copy a dsh install command (mise|npm).
+  save-settings          Save panel settings via `omarchy bar set`:
+                         [--proxy URL] [--port N] [--dsh-path PATH]
+                         [--start-on-login On|Off]
   logs [lines]           Print the service journal tail (tokens redacted).
   setup-service          Install/replace the systemd --user unit.
       --replace-legacy   Replace an existing non-harnessbar dsh-web unit.
@@ -613,20 +617,106 @@ cmd_open() {
   json_ok "opened"
 }
 
+copy_to_clipboard() {
+  local text="$1"
+  if command -v wl-copy >/dev/null 2>&1; then
+    printf '%s' "$text" | wl-copy >/dev/null 2>&1 || return 1
+  elif command -v xclip >/dev/null 2>&1; then
+    printf '%s' "$text" | xclip -selection clipboard >/dev/null 2>&1 || return 1
+  elif command -v xsel >/dev/null 2>&1; then
+    printf '%s' "$text" | xsel --clipboard --input >/dev/null 2>&1 || return 1
+  else
+    return 2
+  fi
+  return 0
+}
+
 cmd_copy_url() {
   local url
   url="$(read_url)"
   [[ -n $url ]] || fail "The web UI is not running; start it first."
-  if command -v wl-copy >/dev/null 2>&1; then
-    printf '%s' "$url" | wl-copy >/dev/null 2>&1 || fail "wl-copy failed."
-  elif command -v xclip >/dev/null 2>&1; then
-    printf '%s' "$url" | xclip -selection clipboard >/dev/null 2>&1 || fail "xclip failed."
-  elif command -v xsel >/dev/null 2>&1; then
-    printf '%s' "$url" | xsel --clipboard --input >/dev/null 2>&1 || fail "xsel failed."
-  else
+  local rc=0
+  copy_to_clipboard "$url" || rc=$?
+  if (( rc == 2 )); then
     fail "No clipboard tool found (install wl-clipboard)."
+  elif (( rc != 0 )); then
+    fail "Could not copy to the clipboard."
   fi
   json_ok "Token URL copied to the clipboard. Treat it as a credential."
+}
+
+cmd_copy_install() {
+  local manager="${1:-}" command=""
+  case $manager in
+    mise) command='mise use -g npm:@deepseek-ai/dsh@latest' ;;
+    npm) command='npm install -g @deepseek-ai/dsh@latest' ;;
+    *) fail "Unknown installer: ${manager:-<none>}. Use: mise or npm." ;;
+  esac
+  local rc=0
+  copy_to_clipboard "$command" || rc=$?
+  if (( rc == 2 )); then
+    fail "No clipboard tool found (install wl-clipboard)."
+  elif (( rc != 0 )); then
+    fail "Could not copy to the clipboard."
+  fi
+  json_ok "Install command copied: $command"
+}
+
+# Save the widget settings through Omarchy's own CLI so shell.json stays
+# canonical. Port/proxy take effect on the next service restart; start on login
+# is applied to the managed unit immediately.
+cmd_save_settings() {
+  local port="" proxy="" dsh_path="" start_on_login=""
+  local set_port=0 set_proxy=0 set_dsh=0 set_start=0
+  while (($# > 0)); do
+    case $1 in
+      --port)
+        port="${2:-}"; set_port=1; shift 2 ;;
+      --proxy)
+        proxy="${2:-}"; set_proxy=1; shift 2 ;;
+      --dsh-path)
+        dsh_path="${2:-}"; set_dsh=1; shift 2 ;;
+      --start-on-login)
+        start_on_login="${2:-}"; set_start=1; shift 2 ;;
+      *)
+        fail "unknown save-settings option: $1" ;;
+    esac
+  done
+  if (( set_port )) && { [[ ! $port =~ ^[0-9]+$ ]] || (( port > 65535 )); }; then
+    fail "Invalid port: use an integer from 0 to 65535."
+  fi
+  if (( set_proxy )) && [[ -n $proxy ]] && ! printf '%s' "$proxy" | grep -Eq '^https?://[^[:space:]]+$'; then
+    fail "Invalid proxy URL: use http:// or https:// (leave empty for direct)."
+  fi
+  if (( set_dsh )) && [[ -n $dsh_path ]]; then
+    [[ $dsh_path == /* ]] || fail "dshPath must be an absolute path."
+    [[ -x $dsh_path ]] || fail "dshPath is not an executable file."
+  fi
+  if (( set_start )) && [[ $start_on_login != "On" && $start_on_login != "Off" ]]; then
+    fail "startOnLogin must be On or Off."
+  fi
+  command -v omarchy >/dev/null 2>&1 || fail "omarchy CLI not found."
+  if (( set_port )); then
+    omarchy bar set "$PLUGIN_ID" port "$port" --json >/dev/null 2>&1 || fail "Could not save the port."
+  fi
+  if (( set_proxy )); then
+    omarchy bar set "$PLUGIN_ID" proxy "$proxy" >/dev/null 2>&1 || fail "Could not save the proxy."
+  fi
+  if (( set_dsh )); then
+    omarchy bar set "$PLUGIN_ID" dshPath "$dsh_path" >/dev/null 2>&1 || fail "Could not save dshPath."
+    rm -f -- "$(hb_state_dir)/version" 2>/dev/null || true
+  fi
+  if (( set_start )); then
+    omarchy bar set "$PLUGIN_ID" startOnLogin "$start_on_login" >/dev/null 2>&1 || fail "Could not save startOnLogin."
+    if unit_is_managed && systemd_bus; then
+      if [[ $start_on_login == "On" ]]; then
+        systemctl --user enable "$UNIT_NAME" >/dev/null 2>&1 || fail "Settings saved, but enabling start on login failed."
+      else
+        systemctl --user disable "$UNIT_NAME" >/dev/null 2>&1 || true
+      fi
+    fi
+  fi
+  json_ok "Settings saved. Restart the service to apply port/proxy changes."
 }
 
 cmd_logs() {
@@ -874,6 +964,8 @@ case "$command" in
   open) cmd_open ;;
   url) cmd_url ;;
   copy-url) cmd_copy_url ;;
+  copy-install-command) cmd_copy_install "${1:-}" ;;
+  save-settings) cmd_save_settings "$@" ;;
   logs) cmd_logs "${1:-120}" ;;
   setup-service) cmd_setup_service "$@" ;;
   remove-service) cmd_remove_service ;;

@@ -13,7 +13,8 @@ journalctl --user -u dsh-web.service -n 200 --no-pager
 
 The helper resolves `dsh` in this order: `dshPath` setting → `DSH_BIN` →
 `~/.local/share/mise/shims/dsh` → `mise which dsh` → `PATH` → `~/.local/bin`.
-Install it with mise or npm, or set the path explicitly:
+Install it with mise or npm (the panel offers both commands with Copy buttons),
+or set the path explicitly in the panel settings editor / CLI:
 
 ```sh
 omarchy bar set io.github.fieldnote-ops.harnessbar dshPath /absolute/path/to/dsh
@@ -35,16 +36,16 @@ Common causes:
   "$HB" restart
   ```
   `0` lets the OS pick a free port; the panel then shows the actual port.
-- The proxy setting is malformed. Use a full URL (`http://127.0.0.1:7890`), not
-  a bare `host:port`.
+- The proxy setting is malformed. Use a full URL (`http://127.0.0.1:8080`), not
+  a bare `host:port`. The panel validates the scheme before saving.
 
 ## The agent cannot reach the DeepSeek API
 
 The systemd user manager does not inherit your graphical session's proxy
-variables. Set the plugin's proxy and restart:
+variables. Set the plugin's proxy (panel Settings → Edit, or CLI) and restart:
 
 ```sh
-omarchy bar set io.github.fieldnote-ops.harnessbar proxy http://127.0.0.1:7890
+omarchy bar set io.github.fieldnote-ops.harnessbar proxy http://127.0.0.1:8080
 "$HB" restart
 ```
 
@@ -60,8 +61,9 @@ unit if stopping it fails, so a running process is never left unsupervised.
 
 ## Changing startOnLogin has no effect
 
-Re-apply the unit after changing the setting: panel → **Apply settings**, or
-`"$HB" setup-service`. Port and proxy changes require a **Restart** afterwards.
+Saving settings from the panel applies start-on-login immediately. If you only
+used `omarchy bar set`, re-apply the unit with panel → **Re-apply unit** (or
+`"$HB" setup-service`). Port and proxy changes require a **Restart** afterwards.
 
 ## "Legacy service detected"
 

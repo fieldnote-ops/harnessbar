@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.fieldnote-ops.harnessbar",
   "name": "DeepSeek Harness",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "author": "FIELD NOTE",
   "license": "MIT",
   "homepage": "https://github.com/fieldnote-ops/harnessbar",
@@ -42,7 +42,7 @@
         "key": "proxy",
         "type": "string",
         "label": "Proxy URL",
-        "description": "Optional HTTP(S) proxy for the background service and update checks, e.g. http://127.0.0.1:7890.",
+        "description": "Optional HTTP(S) proxy for the background service and update checks, e.g. http://127.0.0.1:8080.",
         "defaultValue": ""
       },
       {

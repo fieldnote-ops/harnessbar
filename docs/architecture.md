@@ -130,6 +130,9 @@ helper falls back to the runtime URL plus listener probe and reports
   state. `stop` goes through systemd.
 - The plugin runs unsandboxed inside the shell, like every Omarchy plugin; the
   README tells users to review the source before enabling.
+- Panel settings are written through `omarchy bar set`; proxy values may contain
+  credentials and are stored plaintext in `shell.json`, which the README calls
+  out.
 
 ## Compatibility constraints
 

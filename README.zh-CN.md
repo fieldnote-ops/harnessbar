@@ -25,7 +25,8 @@
   之后服务仍在，状态栏自动恢复连接。
 - **登录自启**：可选 `systemctl --user enable`，无需终端。
 - **可观测**：面板里有版本、host:port、健康状态，以及脱敏后的 journal 尾部日志。
-- **可更新**：识别 mise / npm 安装方式，对比 npm 最新版，一键更新并重启。
+- **可更新**：识别 mise / npm 安装方式；面板打开时会静默检查新版，显示
+  当前 → 最新版本，确认后更新并重启服务。
 - **代理感知**：可选的 `proxy` 设置会同时作用于服务与更新命令——在需要本地代理
   才能访问 DeepSeek API 的网络里很关键。
 - **可迁移**：能识别旧的 `~/.local/bin/dsh-web*` 单元并原地修复。
@@ -71,7 +72,7 @@ omarchy bar move io.github.fieldnote-ops.harnessbar --after omarchy.agents
    `~/.config/systemd/user/dsh-web.service`，并执行 `systemctl --user daemon-reload`
    （无需 sudo）。
 2. **Start**：启动 `dsh web`，把带 token 的启动 URL 写入权限为 600 的运行时文件，
-   并显示健康状态。修改 `startOnLogin` 后，用同一行的 **Apply settings** 应用。
+   并显示健康状态。修改 `startOnLogin` 后，用同一行的 **Re-apply unit** 应用。
 3. **Open UI**：用 Omarchy Web App 窗口（或默认浏览器，取决于 `openMode`）打开 UI。
 
 等价的终端操作：
@@ -85,21 +86,27 @@ HB=~/.config/omarchy/plugins/io.github.fieldnote-ops.harnessbar/bin/harnessbar
 
 ## 设置
 
-设置直接存放在 `~/.config/omarchy/shell.json` 中本插件的条目里，可用
-`omarchy bar set` 修改；修改 `port` 或 `proxy` 后需要在面板里 Restart。
+设置存放在 `~/.config/omarchy/shell.json` 中本插件的条目里。面板的
+**Settings → Edit** 表单通过 `omarchy bar set` 写入；CLI 用法完全等价。
+修改 `port` 或 `proxy` 后需要 **Restart**；`startOnLogin` 在保存设置时立即生效
+（也可用 **Re-apply unit**）。
+
+代理默认是**空（直连）**，只有网络需要本地代理时才设置；文档示例使用通用端口。
+代理 URL 若包含账号密码，会以明文存入 `shell.json`（本机用户与工具可读），
+共享机器上请避免使用。
 
 | 键 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
 | `port` | integer | `3080` | `dsh web` 监听端口；`0` 表示由系统分配 |
-| `proxy` | string | `""` | 可选 HTTP(S) 代理，作用于服务与更新检查，如 `http://127.0.0.1:7890` |
+| `proxy` | string | `""` | 可选 HTTP(S) 代理，作用于服务与更新检查，如 `http://127.0.0.1:8080` |
 | `dshPath` | path | `""` | 可选 `dsh` 绝对路径；留空自动探测 mise、`PATH`、`~/.local/bin` |
 | `openMode` | enum | `Webapp` | `Webapp` 用 `omarchy-launch-or-focus-webapp`；`Browser` 用 `xdg-open` |
-| `startOnLogin` | enum | `Off` | 由 **Install service** / **Apply settings** 应用；`On` 会执行 `systemctl --user enable` |
+| `startOnLogin` | enum | `Off` | 面板/CLI 保存后立即应用（`On` 执行 `systemctl --user enable`），或由 **Re-apply unit** 应用 |
 | `refreshSec` | integer | `5` | 状态轮询间隔（秒） |
 | `glyph` | string | `󰚩` | 状态栏 Nerd Font 图标；填 `DS` 可用纯文字标签 |
 
 ```sh
-omarchy bar set io.github.fieldnote-ops.harnessbar proxy http://127.0.0.1:7890
+omarchy bar set io.github.fieldnote-ops.harnessbar proxy http://127.0.0.1:8080
 omarchy bar set io.github.fieldnote-ops.harnessbar port 3080 --json
 omarchy bar set io.github.fieldnote-ops.harnessbar startOnLogin On
 ```

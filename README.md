@@ -27,8 +27,9 @@ A plain toggle starts a process and hopes for the best. harnessbar treats
 - **Start on login**: opt-in `systemctl --user enable`, no terminal needed.
 - **Observable**: version, host:port, health, and a redacted journal tail in
   the panel.
-- **Updatable**: detects mise vs npm installations, compares the installed
-  version with npm, updates on request, and restarts the service.
+- **Updatable**: detects mise vs npm installations; the panel quietly checks
+  for a newer dsh when opened, shows the installed → latest versions, and
+  updates on request with a confirm (then restarts the service).
 - **Proxy-aware**: the optional `proxy` setting is applied to the service and
   to update commands — important on networks where the DeepSeek API needs a
   local proxy.
@@ -75,7 +76,7 @@ Click the bar glyph. The panel starts in **service not installed** state:
 
 1. **Install service** — writes `~/.config/systemd/user/dsh-web.service` from
    the shipped template and runs `systemctl --user daemon-reload` (no sudo).
-   After changing `startOnLogin`, use **Apply settings** on the same row.
+   After changing `startOnLogin`, use **Re-apply unit** on the same row.
 2. **Start** — starts `dsh web`, captures its tokenized URL into a private
    runtime file, and reports the health.
 3. **Open UI** — opens the web UI in an Omarchy web-app window (or the default
@@ -93,21 +94,28 @@ HB=~/.config/omarchy/plugins/io.github.fieldnote-ops.harnessbar/bin/harnessbar
 ## Settings
 
 Settings live inline in `~/.config/omarchy/shell.json`, in this widget's entry.
-Change them with `omarchy bar set`, and restart the service after changing
-`port` or `proxy`.
+The panel's **Settings → Edit** form writes them through `omarchy bar set`;
+the CLI remains the source of truth and works the same way. Port and proxy
+changes need a **Restart**; `startOnLogin` is applied when the settings are
+saved (or with **Re-apply unit**).
+
+The proxy is **direct by default** (empty). Set it only when your network needs
+a local proxy; the example below uses a generic port. A proxy URL containing
+credentials is stored in plaintext in `shell.json` (and therefore readable by
+your user account and local tools) — avoid it on shared machines.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `port` | integer | `3080` | `dsh web` listener port; `0` lets the OS pick one |
-| `proxy` | string | `""` | Optional HTTP(S) proxy for the service and update checks, e.g. `http://127.0.0.1:7890` |
+| `proxy` | string | `""` | Optional HTTP(S) proxy for the service and update checks, e.g. `http://127.0.0.1:8080` |
 | `dshPath` | path | `""` | Optional absolute path to `dsh`; empty auto-detects mise, `PATH`, and `~/.local/bin` |
 | `openMode` | enum | `Webapp` | `Webapp` uses `omarchy-launch-or-focus-webapp`; `Browser` uses `xdg-open` |
-| `startOnLogin` | enum | `Off` | Applied by **Install service** / **Apply settings** (`On` runs `systemctl --user enable`) |
+| `startOnLogin` | enum | `Off` | Saved from the panel or CLI; applied immediately when saved (`On` runs `systemctl --user enable`), or by **Re-apply unit** |
 | `refreshSec` | integer | `5` | Status polling interval |
 | `glyph` | string | `󰚩` | Nerd Font glyph for the bar; use `DS` for a plain label |
 
 ```sh
-omarchy bar set io.github.fieldnote-ops.harnessbar proxy http://127.0.0.1:7890
+omarchy bar set io.github.fieldnote-ops.harnessbar proxy http://127.0.0.1:8080
 omarchy bar set io.github.fieldnote-ops.harnessbar port 3080 --json
 omarchy bar set io.github.fieldnote-ops.harnessbar startOnLogin On
 ```

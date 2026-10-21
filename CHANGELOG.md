@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0 — 2026-10-21
+
+Settings and onboarding release. Scope stays "local dsh web service"; TUI,
+agents usage, remote/mobile, and multi-instance are explicitly out.
+
+- **Panel settings editor**: edit Proxy, Port, dshPath, and Start on login
+  inline; values are saved through `omarchy bar set`, including validation
+  (port range, http(s) proxy, absolute dshPath). Port/proxy apply after
+  Restart; start-on-login is applied to the managed unit immediately.
+- **Missing-dsh guidance**: when dsh is not installed, the panel shows the
+  mise/npm install commands with Copy buttons. It never installs DSH itself.
+- **Update visibility**: the panel checks for dsh updates quietly when opened
+  (throttled to once per 15 minutes) and the bar tooltip reports an available
+  update. Updating still requires explicit confirmation.
+- **Proxy UX**: default stays empty (direct); docs/examples now use a generic
+  `http://127.0.0.1:8080`; the panel shows a sanitized "direct"/"proxy host"
+  summary and validates the URL before saving.
+- **Cleaner service row**: "Apply settings" is now "Re-apply unit", matching
+  what it actually does.
+- Tests: 102 helper assertions (including settings/copy commands); QML static
+  checks cover the new panel controls.
+
 ## 0.2.3 — 2026-10-21
 
 Follow-up to marketplace review feedback on the Open UI handoff.

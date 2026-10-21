@@ -55,6 +55,13 @@ else
   fail "journal TextEdit must set TextEdit.PlainText"
 fi
 
+if grep -q 'id: proxyField' Panel.qml && grep -q 'Save settings' Panel.qml \
+   && grep -q 'copyInstallCommand' Panel.qml && grep -q 'autoCheckUpdates' Panel.qml; then
+  pass "panel exposes a settings editor, install-command copy, and quiet update check"
+else
+  fail "panel is missing the v0.3 settings/install/update UI"
+fi
+
 if grep -q 'readonly property bool unitActive' Panel.qml; then
   pass "panel derives unit-active state for start/stop"
 else

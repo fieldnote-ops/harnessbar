@@ -20,6 +20,9 @@ BarWidget {
   property bool logsBusy: false
   property var updateInfo: ({})
   property string lastAction: ""
+  property bool updateCheckQuiet: false
+  property double lastAutoCheckMs: 0
+  readonly property bool updateAvailable: updateInfo && updateInfo.updatable === true
 
   // --- paths --------------------------------------------------------------
   readonly property string pluginDir: {
@@ -54,6 +57,7 @@ BarWidget {
     var parts = ["DeepSeek Harness", root.stateLabel]
     if (root.version) parts.push(root.version)
     if (root.hostPort) parts.push(root.hostPort)
+    if (root.updateAvailable) parts.push("update available")
     if (root.busy) parts.push("working…")
     else if (root.actionError) parts.push(root.actionError)
     else if (root.serviceError) parts.push(root.serviceError)
@@ -118,6 +122,18 @@ BarWidget {
   function restartService() { return runCommand("restarting…", ["restart"], "restart") }
   function openUi() { return runCommand("opening…", ["open"], "open") }
   function copyUrl() { return runCommand("copying…", ["copy-url"], "copy") }
+  function copyInstallCommand(manager) {
+    return runCommand("copying…", ["copy-install-command", String(manager)], "copy-install")
+  }
+  function saveSettings(proxy, port, dshPath, startOnLogin) {
+    return runCommand("saving settings…", [
+      "save-settings",
+      "--proxy", String(proxy),
+      "--port", String(port),
+      "--dsh-path", String(dshPath),
+      "--start-on-login", String(startOnLogin)
+    ], "save-settings")
+  }
   function setupService() {
     var args = ["setup-service"]
     if (legacy) args.push("--replace-legacy")
@@ -134,13 +150,25 @@ BarWidget {
     logsProcess.running = true
   }
 
-  function checkUpdates() {
-    if (busy) return
-    busy = true
-    busyLabel = "checking updates…"
-    actionError = ""
+  function checkUpdates(quiet) {
+    if (busy || updateCheckProcess.running) return
+    updateCheckQuiet = quiet === true
+    if (!updateCheckQuiet) {
+      busy = true
+      busyLabel = "checking updates…"
+      actionError = ""
+      actionTimeout.restart()
+    }
     updateCheckProcess.running = true
-    actionTimeout.restart()
+  }
+
+  // Check once per panel session window without spamming npm.
+  function autoCheckUpdates() {
+    if (busy || updateCheckProcess.running) return
+    var now = Date.now()
+    if (now - lastAutoCheckMs < 15 * 60 * 1000) return
+    lastAutoCheckMs = now
+    checkUpdates(true)
   }
 
   // --- processes ----------------------------------------------------------
@@ -223,10 +251,14 @@ BarWidget {
       if (out.charAt(0) === "{") {
         try { parsed = JSON.parse(out) } catch (e) { parsed = null }
       }
+      var quiet = root.updateCheckQuiet
+      root.updateCheckQuiet = false
       if (exitCode !== 0 || !parsed || parsed.ok !== true) {
-        root.actionError = parsed && parsed.message
-          ? String(parsed.message)
-          : "Update check failed; see Logs or the plugin README."
+        if (!quiet) {
+          root.actionError = parsed && parsed.message
+            ? String(parsed.message)
+            : "Update check failed; see Logs or the plugin README."
+        }
       } else {
         root.actionError = ""
         root.updateInfo = parsed

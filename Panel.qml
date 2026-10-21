@@ -44,6 +44,13 @@ Panel {
   property bool showLogs: false
   property string pendingAction: ""
   property string pendingMessage: ""
+  property bool settingsExpanded: true
+  property string proxyDraft: ""
+  property string portDraft: ""
+  property string dshPathDraft: ""
+  property string startOnLoginDraft: "Off"
+  property string settingsError: ""
+  readonly property bool editingSettings: proxyField.activeFocus || portField.activeFocus || dshPathField.activeFocus
 
   function stateText(value) {
     switch (value) {
@@ -74,6 +81,55 @@ Panel {
       return text
     }
     return version ? "dsh " + version : "dsh version unknown"
+  }
+
+  function sanitizeProxy(value) {
+    var text = String(value || "")
+    if (text === "") return "direct"
+    var scheme = text.split("://")[0]
+    var rest = text.replace(/^[a-z0-9+.-]+:\/\//i, "")
+    rest = rest.replace(/^[^@/]*@/, "")
+    rest = rest.replace(/[/?#].*$/, "")
+    return text.indexOf("://") >= 0 ? (scheme + "://" + rest) : rest
+  }
+
+  function proxyLabel() {
+    var proxy = String(setting("proxy", ""))
+    return proxy === "" ? "direct" : root.sanitizeProxy(proxy)
+  }
+
+  function settingsSummary() {
+    return root.proxyLabel() + " · port " + String(setting("port", 3080))
+  }
+
+  function loadSettings() {
+    proxyField.text = String(setting("proxy", ""))
+    portField.text = String(setting("port", 3080))
+    dshPathField.text = String(setting("dshPath", ""))
+    startOnLoginDraft = String(setting("startOnLogin", "Off"))
+    settingsError = ""
+    proxyDraft = proxyField.text
+    portDraft = portField.text
+    dshPathDraft = dshPathField.text
+  }
+
+  function validateSettings() {
+    if (!/^[0-9]+$/.test(portDraft) || Number(portDraft) > 65535) return "Port must be an integer from 0 to 65535."
+    if (proxyDraft !== "" && !/^https?:\/\/\S+$/.test(proxyDraft)) return "Proxy must start with http:// or https://, or stay empty for direct."
+    if (dshPathDraft !== "" && dshPathDraft.charAt(0) !== "/") return "dshPath must be an absolute path, or empty for auto-detection."
+    if (startOnLoginDraft !== "On" && startOnLoginDraft !== "Off") return "Start on login must be On or Off."
+    return ""
+  }
+
+  function saveSettings() {
+    settingsError = validateSettings()
+    if (settingsError !== "") return
+    if (host) host.saveSettings(proxyDraft, portDraft, dshPathDraft, startOnLoginDraft)
+  }
+
+  function toggleStartOnLogin() {
+    startOnLoginDraft = startOnLoginDraft === "On" ? "Off" : "On"
+    settingsError = ""
   }
 
   function execute(action) {
@@ -142,7 +198,11 @@ Panel {
   onOpenedChanged: {
     pendingAction = ""
     pendingMessage = ""
-    if (opened) refreshAll()
+    if (opened) {
+      loadSettings()
+      refreshAll()
+      if (host && root.serviceState !== "no-dsh") host.autoCheckUpdates()
+    }
   }
 
   KeyboardPanel {
@@ -153,11 +213,12 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(400))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight + Style.space(4), Style.space(560))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight + Style.space(4), Style.space(720))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: root.editingSettings
       onCloseRequested: {
         if (root.pendingAction !== "") root.cancelPending()
         else root.close()
@@ -376,11 +437,11 @@ Panel {
               }
               Button {
                 visible: root.managed
-                text: "Apply settings"
+                text: "Re-apply unit"
                 focusable: true
                 bordered: true
                 enabled: !!root.host && !root.busy
-                tooltipText: "Re-apply the unit and startOnLogin setting; restart afterwards to change port/proxy."
+                tooltipText: "Rewrite the managed systemd unit from the current settings (no service restart)."
                 onClicked: root.execute("install-service")
               }
               Button {
@@ -390,6 +451,212 @@ Panel {
                 bordered: true
                 enabled: !!root.host && !root.busy
                 onClicked: root.requestAction("remove-service")
+              }
+            }
+          }
+
+          ColumnLayout {
+            Layout.fillWidth: true
+            visible: root.serviceState === "no-dsh"
+            spacing: Style.space(5)
+
+            Text {
+              Layout.fillWidth: true
+              text: "DeepSeek Harness is not installed. Install it first:"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(6)
+              Text {
+                Layout.fillWidth: true
+                text: "mise use -g npm:@deepseek-ai/dsh@latest"
+                color: root.dim
+                font.family: "monospace"
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideMiddle
+              }
+              Button {
+                text: "Copy"
+                focusable: true
+                bordered: true
+                enabled: !!root.host && !root.busy
+                onClicked: root.host.copyInstallCommand("mise")
+              }
+            }
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(6)
+              Text {
+                Layout.fillWidth: true
+                text: "npm install -g @deepseek-ai/dsh@latest"
+                color: root.dim
+                font.family: "monospace"
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideMiddle
+              }
+              Button {
+                text: "Copy"
+                focusable: true
+                bordered: true
+                enabled: !!root.host && !root.busy
+                onClicked: root.host.copyInstallCommand("npm")
+              }
+            }
+            Text {
+              Layout.fillWidth: true
+              text: "If dsh is installed outside PATH, set dshPath in Settings."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+          }
+
+          Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: 1
+            color: Util.alpha(root.foreground, 0.12)
+          }
+
+          ColumnLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(6)
+
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(6)
+              Text {
+                Layout.fillWidth: true
+                text: "SETTINGS · " + root.settingsSummary()
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WordWrap
+              }
+              Button {
+                text: root.settingsExpanded ? "Hide" : "Edit"
+                focusable: true
+                bordered: true
+                enabled: !!root.host && !root.busy
+                onClicked: root.settingsExpanded = !root.settingsExpanded
+              }
+            }
+
+            ColumnLayout {
+              Layout.fillWidth: true
+              visible: root.settingsExpanded
+              spacing: Style.space(5)
+
+              Text {
+                Layout.fillWidth: true
+                text: "Stored in shell.json. Port/proxy apply after Restart; start on login is applied when saving."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(6)
+                Text {
+                  text: "Proxy"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  Layout.preferredWidth: Style.space(64)
+                }
+                TextField {
+                  id: proxyField
+                  Layout.fillWidth: true
+                  placeholderText: "http://127.0.0.1:8080 (empty = direct)"
+                  onTextChanged: { root.proxyDraft = text; root.settingsError = "" }
+                }
+              }
+
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(6)
+                Text {
+                  text: "Port"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  Layout.preferredWidth: Style.space(64)
+                }
+                TextField {
+                  id: portField
+                  Layout.preferredWidth: Style.space(90)
+                  placeholderText: "3080"
+                  inputMethodHints: Qt.ImhDigitsOnly
+                  onTextChanged: { root.portDraft = text; root.settingsError = "" }
+                }
+                Item { Layout.fillWidth: true }
+                Text {
+                  text: "Start on login"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                Button {
+                  text: root.startOnLoginDraft
+                  focusable: true
+                  bordered: true
+                  enabled: !!root.host && !root.busy
+                  onClicked: root.toggleStartOnLogin()
+                }
+              }
+
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(6)
+                Text {
+                  text: "dshPath"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  Layout.preferredWidth: Style.space(64)
+                }
+                TextField {
+                  id: dshPathField
+                  Layout.fillWidth: true
+                  placeholderText: "auto-detect (optional)"
+                  onTextChanged: { root.dshPathDraft = text; root.settingsError = "" }
+                }
+              }
+
+              Text {
+                Layout.fillWidth: true
+                visible: root.settingsError !== ""
+                text: root.settingsError
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(6)
+                Item { Layout.fillWidth: true }
+                Button {
+                  text: "Save settings"
+                  focusable: true
+                  bordered: true
+                  enabled: !!root.host && !root.busy
+                  onClicked: root.saveSettings()
+                }
+                Button {
+                  text: "Restart"
+                  focusable: true
+                  bordered: true
+                  enabled: !!root.host && !root.busy && root.unitInstalled
+                  onClicked: root.requestAction("restart")
+                }
               }
             }
           }
