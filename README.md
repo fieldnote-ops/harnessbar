@@ -162,8 +162,8 @@ is detected and can be repaired instead of duplicated.
   private, owner-only `file://` redirect page under `$XDG_RUNTIME_DIR`, passes
   only that file path to the launcher, and removes the page shortly afterwards.
   The token therefore does not appear in `/proc/<pid>/cmdline` for the helper,
-  the launcher, or the browser; it does of course appear in the browser's own
-  address bar/history while the page is open.
+  the escaping helpers, the launcher, or the browser; it does of course appear
+  in the browser's own address bar/history while the page is open.
 - **Upgrading from 0.2.1 or earlier:** a browser window launched by the old
   plugin may still carry the old launch token in its process arguments until
   that browser process exits. Close the DeepSeek Harness window/browser once

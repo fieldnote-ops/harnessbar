@@ -534,8 +534,10 @@ write_launch_page() {
   if [[ $page == *[[:space:]%#?]* ]]; then
     fail "The runtime path cannot form a safe file URL; set XDG_RUNTIME_DIR to a simple path."
   fi
-  html_url="$(jq -Rn --arg u "$url" '$u|@html')"
-  js_url="$(jq -Rn --arg u "$url" '$u')"
+  # Feed jq over stdin: --arg would put the launch token into jq's argv and
+  # expose it through /proc/<pid>/cmdline to other local users.
+  html_url="$(printf '%s' "$url" | jq -Rrs '@html')"
+  js_url="$(printf '%s' "$url" | jq -Rs '.')"
   if ! (umask 077 && printf '%s\n' \
     '<!doctype html>' \
     '<html><head><meta charset="utf-8">' \

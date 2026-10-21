@@ -272,6 +272,16 @@ assert_not_contains "run keeps the token out of the log" "$run_log" "stub-secret
 
 # 15. open hands the browser a private redirect page, never the token URL
 setup_env
+REAL_JQ="$(command -v jq)"
+cat > "$TESTROOT/bin/jq" <<EOF
+#!/usr/bin/env bash
+printf 'jq' >> "$TESTROOT/jq-args.log"
+printf ' %q' "\$@" >> "$TESTROOT/jq-args.log"
+printf '\n' >> "$TESTROOT/jq-args.log"
+exec "$REAL_JQ" "\$@"
+EOF
+chmod +x "$TESTROOT/bin/jq"
+: > "$TESTROOT/jq-args.log"
 write_shell_config "12345" "$STUB_DSH_PATH"
 printf 'active\n' > "$STUB_STATE_FILE"
 printf 'http://127.0.0.1:12345/?token=stub-secret\n' > "$STUB_URL_FILE"
@@ -296,7 +306,11 @@ page_content="$(cat "$page_path" 2>/dev/null || true)"
 assert_contains "redirect page carries the launch URL" "$page_content" "token=stub-secret"
 assert_contains "redirect page is the DSH launch page" "$page_content" "DeepSeek Harness"
 assert_contains "redirect page uses a meta refresh" "$page_content" "http-equiv=\"refresh\""
+assert_contains "meta refresh carries the URL unquoted" "$page_content" "content=\"0;url=http"
 assert_contains "redirect page uses a JS redirect" "$page_content" "location.replace("
+jq_args="$(cat "$TESTROOT/jq-args.log" 2>/dev/null || true)"
+assert_contains "escaping helper was invoked" "$jq_args" "jq"
+assert_not_contains "escaping subprocess argv must not contain the token" "$jq_args" "stub-secret"
 unset HARNESSBAR_OPEN_PAGE_TTL
 for _ in $(seq 1 40); do
   [[ -e $page_path ]] || break

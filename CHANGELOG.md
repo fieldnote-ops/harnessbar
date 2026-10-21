@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.3 — 2026-10-21
+
+Follow-up to marketplace review feedback on the Open UI handoff.
+
+- The HTML/JS escaping subprocesses (`jq`) now receive the tokenized URL on
+  **stdin**, not through `--arg`, so the launch token never appears in any
+  child process argument. The private redirect page is unchanged.
+- Metadata escaping now emits the actual attribute/string values (raw HTML
+  escaping and a JSON-quoted JS string) instead of jq's quoted string output.
+- Tests add a jq-wrapper assertion that the escaping subprocess argv is
+  token-free (85 helper assertions).
+
 ## 0.2.2 — 2026-10-21
 
 Security hardening for the Open UI handoff after marketplace review.

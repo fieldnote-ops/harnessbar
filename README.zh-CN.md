@@ -148,8 +148,8 @@ omarchy-shell shell call io.github.fieldnote-ops.harnessbar refresh ''
   面板中明文展示，只有你主动点击 Copy 才复制。请同样注意截图、剪贴板历史与日志分享。
 - **Open UI 不会把 token 放进进程参数**：它把 token URL 写入 `$XDG_RUNTIME_DIR`
   下仅属主可读的 `file://` 重定向页，只把该文件路径交给启动器，并在约 20 秒后删除。
-  因此 helper、启动器和浏览器的 `/proc/<pid>/cmdline` 里都没有凭据；token 仍会出现在
-  浏览器地址栏/历史中（这是打开页面本身所必需的）。
+  因此 helper、转义子进程、启动器和浏览器的 `/proc/<pid>/cmdline` 里都没有凭据；
+  token 仍会出现在浏览器地址栏/历史中（这是打开页面本身所必需的）。
 - **从 0.2.1 或更早版本升级**：旧插件启动的浏览器进程可能仍把旧 token 留在其进程参数中，
   直到该浏览器进程退出。关闭 DeepSeek Harness 窗口/浏览器后从面板重新打开即可消除；
   重启 `dsh-web.service` 也会让旧 token 失效。新打开的窗口始终走私有重定向页。
