@@ -55,6 +55,12 @@ else
   fail "journal TextEdit must set TextEdit.PlainText"
 fi
 
+if grep -q 'stdinEnabled: true' BarWidget.qml && grep -q 'pendingStdinActive' BarWidget.qml; then
+  pass "panel action process enables stdin and sends an explicit empty line"
+else
+  fail "action process is missing the stdin payload path"
+fi
+
 if grep -q '"--proxy-stdin"' BarWidget.qml \
    && ! grep -q '"--proxy", String(proxy)' BarWidget.qml; then
   pass "panel sends the proxy over stdin, not argv"

@@ -687,7 +687,12 @@ cmd_save_settings() {
   if (( set_proxy )); then
     # The proxy may include user:password. It arrives on stdin and is written
     # to an owner-only file before jq reads it, so it never appears in argv.
-    IFS= read -r proxy || true
+    # Zero bytes on stdin means the parent never wrote (e.g. stdin not
+    # enabled); fail instead of silently clearing the proxy. An explicit empty
+    # line (the panel sends proxy + "\n") still means "direct".
+    if ! IFS= read -r proxy; then
+      [[ -n $proxy ]] || fail "No proxy received on stdin; refusing to clear it (send an empty line for direct)."
+    fi
     proxy="${proxy%$'\r'}"
   fi
   if (( set_port )) && { [[ ! $port =~ ^[0-9]+$ ]] || (( port > 65535 )); }; then

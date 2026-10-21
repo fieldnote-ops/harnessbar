@@ -384,10 +384,18 @@ assert_eq "proxy is written to shell.json" \
   "$(jq -r --arg id "$PLUGIN_ID" '.. | objects | select(.id? == $id) | .proxy' "$HOME/.config/omarchy/shell.json")" \
   "http://user:secret@127.0.0.1:8080"
 # clearing the proxy is allowed and writes an empty string
-out="$(printf '' | "$HELPER" save-settings --proxy-stdin --port 7331 --dsh-path "" --start-on-login Off 2>/dev/null)"
+out="$(printf '\n' | "$HELPER" save-settings --proxy-stdin --port 7331 --dsh-path "" --start-on-login Off 2>/dev/null)"
 assert_exit "save-settings clears the proxy" 0 $?
 assert_eq "empty proxy written to shell.json" \
   "$(jq -r --arg id "$PLUGIN_ID" '.. | objects | select(.id? == $id) | .proxy' "$HOME/.config/omarchy/shell.json")" ""
+# zero-byte stdin must not silently clear the configured proxy
+write_shell_config "12345" "$STUB_DSH_PATH" ', "proxy": "http://keep-me.invalid:8080"'
+out="$("$HELPER" save-settings --proxy-stdin --port 7331 --dsh-path "" --start-on-login Off < /dev/null 2>/dev/null)"
+assert_eq "save-settings rejects empty stdin" "$?" "1"
+assert_contains "empty stdin error message" "$out" "No proxy received"
+assert_eq "failed save keeps the configured proxy" \
+  "$(jq -r --arg id "$PLUGIN_ID" '.. | objects | select(.id? == $id) | .proxy' "$HOME/.config/omarchy/shell.json")" \
+  "http://keep-me.invalid:8080"
 rm -f "$TESTROOT/bin/jq"
 hash -r
 

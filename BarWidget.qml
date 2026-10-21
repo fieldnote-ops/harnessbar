@@ -23,6 +23,7 @@ BarWidget {
   property bool updateCheckQuiet: false
   property double lastAutoCheckMs: 0
   property string pendingStdin: ""
+  property bool pendingStdinActive: false
   readonly property bool updateAvailable: updateInfo && updateInfo.updatable === true
 
   // --- paths --------------------------------------------------------------
@@ -107,7 +108,8 @@ BarWidget {
     lastAction = actionKey || ""
     actionError = ""
     lastMessage = ""
-    pendingStdin = stdinPayload === undefined || stdinPayload === null ? "" : String(stdinPayload)
+    pendingStdinActive = !(stdinPayload === undefined || stdinPayload === null)
+    pendingStdin = pendingStdinActive ? String(stdinPayload) : ""
     actionProcess.command = [root.helper].concat(args)
     actionProcess.running = true
     actionTimeout.restart()
@@ -195,16 +197,23 @@ BarWidget {
 
   Process {
     id: actionProcess
+    // Quickshell only opens the child's stdin when this is enabled; without it
+    // write() is a no-op and the helper would see EOF instead of the proxy.
+    stdinEnabled: true
     stdout: StdioCollector { id: actionOut; waitForEnd: true }
     stderr: StdioCollector { id: actionErr; waitForEnd: true }
     onStarted: function() {
-      if (root.pendingStdin !== "") {
+      if (root.pendingStdinActive) {
+        // Always terminate with a newline; an empty line is the explicit
+        // "clear the proxy" payload and must still be written.
         actionProcess.write(root.pendingStdin + "\n")
         root.pendingStdin = ""
+        root.pendingStdinActive = false
       }
     }
     onExited: function(exitCode) {
       root.pendingStdin = ""
+      root.pendingStdinActive = false
       actionTimeout.stop()
       root.busy = false
       root.busyLabel = ""

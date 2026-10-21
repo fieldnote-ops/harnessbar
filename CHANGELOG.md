@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.2 — 2026-10-21
+
+Fix the panel's proxy stdin path found in marketplace review:
+
+- Quickshell `Process.write()` requires `stdinEnabled: true`; the action process
+  now enables it, so the proxy reaches the helper instead of the helper seeing
+  EOF.
+- Even an empty proxy (the explicit "clear" action) is written as a newline,
+  and the helper rejects zero-byte stdin instead of silently treating it as
+  direct. Failed delivery no longer clears a configured proxy.
+- Static checks cover `stdinEnabled`; helper tests cover empty-line clear and
+  zero-byte rejection.
+
+
 ## 0.3.1 — 2026-10-21
 
 Marketplace-review hardening for proxy credentials.
