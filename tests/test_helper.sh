@@ -402,6 +402,20 @@ out="$("$HELPER" save-settings --dsh-path relative/path 2>/dev/null)"
 assert_eq "save-settings rejects a relative dshPath" "$?" "1"
 assert_contains "dshPath error message" "$out" "absolute path"
 
+# 8b. proxy credentials never enter update-command argv
+setup_env
+write_shell_config "12345" "$STUB_DSH_PATH" ', "proxy": "http://user:secret@127.0.0.1:7080"'
+: > "$STUB_LOG"
+out="$("$HELPER" update --check 2>/dev/null)"
+assert_exit "proxy update check (exit)" 0 $?
+out="$("$HELPER" update 2>/dev/null)"
+assert_exit "proxy update apply (exit)" 0 $?
+update_log="$(cat "$STUB_LOG")"
+assert_not_contains "proxy is not in npm check argv" "$update_log" "user:secret"
+assert_not_contains "proxy is not in npm install argv" "$update_log" "user:secret"
+assert_contains "update still uses npm" "$update_log" "npm install -g @deepseek-ai/dsh@9.9.10"
+
+
 # 16. startOnLogin is applied when setup-service is re-run on a managed unit
 setup_env
 "$HELPER" setup-service >/dev/null 2>&1
