@@ -220,12 +220,92 @@ npm_private_cache() {
   printf '%s\n' "$dir"
 }
 
-npm_latest() {
-  local latest cache
+# True when $1 is strictly newer than $2 under semver precedence (build
+# metadata ignored, prereleases ordered by identifier).
+version_gt() {
+  local left="${1%%+*}" right="${2%%+*}" lcore rcore lpre rpre
+  if [[ $left == *-* ]]; then lcore="${left%%-*}"; lpre="${left#*-}"; else lcore="$left"; lpre=""; fi
+  if [[ $right == *-* ]]; then rcore="${right%%-*}"; rpre="${right#*-}"; else rcore="$right"; rpre=""; fi
+  local -a lcore_parts=() rcore_parts=() lpre_parts=() rpre_parts=()
+  IFS='.' read -r -a lcore_parts <<< "$lcore"
+  IFS='.' read -r -a rcore_parts <<< "$rcore"
+  local i lnum rnum lp rp count
+  for i in 0 1 2 3; do
+    lnum="${lcore_parts[i]:-0}"
+    rnum="${rcore_parts[i]:-0}"
+    [[ $lnum =~ ^[0-9]+$ ]] || lnum=0
+    [[ $rnum =~ ^[0-9]+$ ]] || rnum=0
+    (( 10#$lnum > 10#$rnum )) && return 0
+    (( 10#$lnum < 10#$rnum )) && return 1
+  done
+  # Equal release cores: a prerelease ranks below the release it precedes.
+  [[ -z $lpre && -z $rpre ]] && return 1
+  [[ -z $lpre ]] && return 0
+  [[ -z $rpre ]] && return 1
+  IFS='.' read -r -a lpre_parts <<< "$lpre"
+  IFS='.' read -r -a rpre_parts <<< "$rpre"
+  count="${#lpre_parts[@]}"
+  (( ${#rpre_parts[@]} > count )) && count="${#rpre_parts[@]}"
+  for ((i = 0; i < count; i++)); do
+    lp="${lpre_parts[i]:-}"
+    rp="${rpre_parts[i]:-}"
+    [[ -z $lp && -z $rp ]] && continue
+    [[ -z $lp ]] && return 1
+    [[ -z $rp ]] && return 0
+    if [[ $lp =~ ^[0-9]+$ && $rp =~ ^[0-9]+$ ]]; then
+      (( 10#$lp > 10#$rp )) && return 0
+      (( 10#$lp < 10#$rp )) && return 1
+      continue
+    fi
+    # Numeric identifiers rank below alphanumeric ones.
+    [[ $lp =~ ^[0-9]+$ ]] && return 1
+    [[ $rp =~ ^[0-9]+$ ]] && return 0
+    [[ $lp == "$rp" ]] && continue
+    [[ $lp > $rp ]] && return 0
+    return 1
+  done
+  return 1
+}
+
+npm_published_tags() {
+  local cache
   cache="$(npm_private_cache)"
-  latest="$( ( export npm_config_cache="$cache"; run_with_proxy npm view @deepseek-ai/dsh version 2>/dev/null ) | tail -n 1 || true)"
-  latest="${latest//[[:space:]]/}"
-  printf '%s\n' "$latest"
+  ( export npm_config_cache="$cache"; run_with_proxy npm view @deepseek-ai/dsh dist-tags --json 2>/dev/null ) \
+    | jq -r 'to_entries[] | "\(.key) \(.value)"' 2>/dev/null || true
+}
+
+# Resolve the version an update should install. dsh publishes release
+# candidates under `next` and promotes the recommended one to `latest`, so an
+# installed prerelease follows the newest published tag while a stable install
+# only follows `latest` (a prerelease never replaces a stable release).
+# Sets UPDATE_TARGET and UPDATE_CHANNEL; returns non-zero when npm is unusable.
+UPDATE_TARGET=""
+UPDATE_CHANNEL=""
+resolve_update_target() {
+  local current="$1" tags="" tag="" version="" candidate="" channel=""
+  UPDATE_TARGET=""
+  UPDATE_CHANNEL=""
+  tags="$(npm_published_tags)"
+  [[ -n $tags ]] || return 1
+  if [[ $current == *-* ]]; then
+    while read -r tag version; do
+      [[ -n $tag && -n $version ]] || continue
+      if [[ -z $candidate ]] || version_gt "$version" "$candidate"; then
+        candidate="$version"
+        channel="$tag"
+      fi
+    done <<< "$tags"
+  else
+    while read -r tag version; do
+      [[ $tag == "latest" ]] || continue
+      candidate="$version"
+      channel="$tag"
+      break
+    done <<< "$tags"
+  fi
+  [[ -n $candidate ]] || return 1
+  UPDATE_TARGET="$candidate"
+  UPDATE_CHANNEL="$channel"
 }
 
 run_with_proxy() {
@@ -524,22 +604,34 @@ cmd_toggle() {
 sweep_launch_pages() {
   local dir
   dir="$(hb_state_dir)"
-  find "$dir" -maxdepth 1 \( -name 'open-*.html' -o -name 'open-*.html.tmp' \) -mmin +2 -delete 2>/dev/null || true
+  find "$dir" -maxdepth 1 -name 'open-*' -mmin +2 -delete 2>/dev/null || true
 }
 
-# Write a private file:// page that redirects to the tokenized launch URL.
-# The browser/web-app launcher only ever receives this file path, so the token
-# never appears in a process argument (visible through /proc/<pid>/cmdline).
-write_launch_page() {
-  local url="$1" dir page html_url js_url
+# The browser must start its authentication navigation from a page served on
+# the same site as dsh web: Chromium refuses to send a SameSite=Strict cookie
+# on the redirect that follows a navigation started from a file:// document,
+# which left every freshly opened window on dsh's 401 page. So the handoff page
+# is served from 127.0.0.1 (same site, any port) by a one-shot listener, and
+# the token still never reaches a process argument.
+STAGE_FILE=""
+STAGE_TARGET=""
+STAGE_PID=""
+STAGE_PORT=""
+
+# Build the one-shot HTTP response: line 1 is the exact request target the
+# browser has to ask for, the rest is the redirect page. The page carries the
+# launch token, so an unguessable single-use path keeps other local users from
+# fetching it from the loopback listener before the browser does.
+write_stage_response() {
+  local url="$1" dir file body_size html_url js_url target
   if ! printf '%s' "$url" | grep -Eq '^https?://[^[:space:]<>]+$'; then
     fail "The launch URL contains characters that cannot be staged safely; refusing to open it."
   fi
-  dir="$(ensure_state_dir)" || fail "Cannot create a private runtime directory for the launch page."
-  page="$dir/open-$(date +%s)-$$.html"
-  if [[ $page == *[[:space:]%#?]* ]]; then
-    fail "The runtime path cannot form a safe file URL; set XDG_RUNTIME_DIR to a simple path."
-  fi
+  dir="$(ensure_state_dir)" || fail "Cannot create a private runtime directory for the login page."
+  target="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [[ $target =~ ^[0-9a-f]{32}$ ]] \
+    || target="$(printf '%08x%08x%08x%08x' "$RANDOM" "$RANDOM" "$RANDOM" "$RANDOM")"
+  file="$dir/open-$(date +%s)-$$.http"
   # Feed jq over stdin: --arg would put the launch token into jq's argv and
   # expose it through /proc/<pid>/cmdline to other local users.
   html_url="$(printf '%s' "$url" | jq -Rrs '@html')"
@@ -550,35 +642,104 @@ write_launch_page() {
     "<meta http-equiv=\"refresh\" content=\"0;url=$html_url\">" \
     '<title>DeepSeek Harness</title>' \
     "<script>location.replace($js_url)</script>" \
-    '</head><body>Opening DeepSeek Harness…</body></html>' > "$page.tmp"); then
-    rm -f -- "$page.tmp" 2>/dev/null || true
-    fail "Cannot write the private launch page."
+    '</head><body>Opening DeepSeek Harness…</body></html>' > "$file.body.tmp"); then
+    rm -f -- "$file.body.tmp" 2>/dev/null || true
+    fail "Cannot write the private login page."
   fi
-  if ! chmod 600 -- "$page.tmp" 2>/dev/null || ! mv -f -- "$page.tmp" "$page" 2>/dev/null; then
-    rm -f -- "$page.tmp" 2>/dev/null || true
-    fail "Cannot stage the private launch page."
+  # Content-Length counts bytes: the page holds a multibyte ellipsis, so the
+  # shell's character count would truncate it.
+  body_size="$(wc -c < "$file.body.tmp" 2>/dev/null | tr -d '[:space:]')"
+  if [[ ! $body_size =~ ^[0-9]+$ ]]; then
+    rm -f -- "$file.body.tmp" 2>/dev/null || true
+    fail "Cannot measure the private login page."
   fi
-  [[ -s $page ]] || fail "The private launch page is empty."
-  printf '%s\n' "$page"
+  if ! (umask 077 && {
+      printf 'GET /%s HTTP/1.1\n' "$target"
+      printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %s\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n' "$body_size"
+      cat -- "$file.body.tmp"
+    } > "$file.tmp"); then
+    rm -f -- "$file.tmp" "$file.body.tmp" 2>/dev/null || true
+    fail "Cannot stage the private login page."
+  fi
+  rm -f -- "$file.body.tmp" 2>/dev/null || true
+  if ! chmod 600 -- "$file.tmp" 2>/dev/null || ! mv -f -- "$file.tmp" "$file" 2>/dev/null; then
+    rm -f -- "$file.tmp" 2>/dev/null || true
+    fail "Cannot stage the private login page."
+  fi
+  [[ -s $file ]] || fail "The private login page is empty."
+  STAGE_FILE="$file"
+  STAGE_TARGET="$target"
 }
 
-schedule_launch_page_cleanup() {
-  local page="$1" ttl="${HARNESSBAR_OPEN_PAGE_TTL:-20}"
+# Serve the staged response to the first client that asks for the exact
+# single-use path, then take the listener down. Runs as the per-connection
+# child of systemd-socket-activate, so stdin/stdout are the connection and the
+# parent process is the listener.
+cmd_serve_stage() {
+  local file="${1:-}" expected="" method="" target="" version="" header=""
+  [[ -n $file && -s $file ]] || return 0
+  expected="$(head -n 1 -- "$file" 2>/dev/null || true)"
+  expected="${expected#GET /}"
+  expected="${expected%% *}"
+  if [[ -n $expected ]]; then
+    IFS=' ' read -r -t 10 method target version || true
+    target="${target%$'\r'}"
+  fi
+  # Drain the remaining request headers: closing a socket that still holds
+  # unread request bytes resets the connection, and the browser then loses the
+  # page it was about to render.
+  while IFS= read -r -t 2 header; do
+    header="${header%$'\r'}"
+    [[ -z $header ]] && break
+  done
+  if [[ -n $expected && $method == "GET" && $target == "/$expected" ]]; then
+    tail -n +2 -- "$file" 2>/dev/null || true
+    rm -f -- "$file" 2>/dev/null || true
+    kill "$PPID" 2>/dev/null || true
+  else
+    printf 'HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
+  fi
+}
+
+# Start the loopback listener on a free port; the browser cannot reach a port
+# that was already taken, so retry a few.
+start_stage_listener() {
+  local file="$1" port pid attempt runner=()
+  command -v systemd-socket-activate >/dev/null 2>&1 || return 1
+  command -v setsid >/dev/null 2>&1 && runner=(setsid)
+  for attempt in 1 2 3 4 5 6 7 8; do
+    port=$(( 32000 + RANDOM % 20000 ))
+    "${runner[@]}" systemd-socket-activate --listen="127.0.0.1:$port" \
+      --accept --inetd -- "$ROOT/bin/harnessbar" __serve-stage "$file" >/dev/null 2>&1 &
+    pid=$!
+    sleep 0.15
+    if kill -0 "$pid" 2>/dev/null; then
+      STAGE_PID="$pid"
+      STAGE_PORT="$port"
+      return 0
+    fi
+  done
+  return 1
+}
+
+schedule_stage_cleanup() {
+  local file="$1" pid="$2" ttl="${HARNESSBAR_OPEN_PAGE_TTL:-20}"
   [[ $ttl =~ ^[0-9]+$ ]] || ttl=20
+  local runner=(bash -c 'sleep "$1"; [ -n "$2" ] && kill "$2" 2>/dev/null; rm -f -- "$3"' \
+    harnessbar-stage-cleanup "$ttl" "$pid" "$file")
   if command -v setsid >/dev/null 2>&1; then
-    if ! setsid --fork bash -c 'sleep "$1"; rm -f -- "$2"' harnessbar-page-cleanup "$ttl" "$page" >/dev/null 2>&1; then
-      bash -c 'sleep "$1"; rm -f -- "$2"' harnessbar-page-cleanup "$ttl" "$page" >/dev/null 2>&1 &
+    if ! setsid --fork "${runner[@]}" >/dev/null 2>&1; then
+      "${runner[@]}" >/dev/null 2>&1 &
     fi
   else
-    bash -c 'sleep "$1"; rm -f -- "$2"' harnessbar-page-cleanup "$ttl" "$page" >/dev/null 2>&1 &
+    "${runner[@]}" >/dev/null 2>&1 &
   fi
 }
 
 cmd_open() {
-  local url
+  local url start_out mode launch_uri
   url="$(read_url)"
   if [[ -z $url ]]; then
-    local start_out
     start_out="$(cmd_start)"
     if [[ $? -ne 0 ]]; then
       printf '%s\n' "$start_out"
@@ -589,16 +750,23 @@ cmd_open() {
   [[ -n $url ]] || fail "No launch URL is available yet; wait a moment and retry."
 
   sweep_launch_pages
-  local page launch_uri mode
-  page="$(write_launch_page "$url")" || exit 1
-  launch_uri="file://$page"
+  if ! command -v systemd-socket-activate >/dev/null 2>&1; then
+    fail "systemd-socket-activate is required to hand the browser a login page; install systemd."
+  fi
+  write_stage_response "$url" || exit 1
+  if ! start_stage_listener "$STAGE_FILE"; then
+    rm -f -- "$STAGE_FILE" 2>/dev/null || true
+    fail "Could not start a private loopback page for the browser."
+  fi
+  launch_uri="http://127.0.0.1:$STAGE_PORT/$STAGE_TARGET"
   mode="$(setting openMode Webapp)"
   case $mode in
     Browser)
       if command -v xdg-open >/dev/null 2>&1; then
         setsid xdg-open "$launch_uri" >/dev/null 2>&1 &
       else
-        rm -f -- "$page" 2>/dev/null || true
+        kill "$STAGE_PID" 2>/dev/null || true
+        rm -f -- "$STAGE_FILE" 2>/dev/null || true
         fail "xdg-open is not available."
       fi
       ;;
@@ -610,12 +778,13 @@ cmd_open() {
       elif command -v xdg-open >/dev/null 2>&1; then
         setsid xdg-open "$launch_uri" >/dev/null 2>&1 &
       else
-        rm -f -- "$page" 2>/dev/null || true
+        kill "$STAGE_PID" 2>/dev/null || true
+        rm -f -- "$STAGE_FILE" 2>/dev/null || true
         fail "No web-app launcher is available."
       fi
       ;;
   esac
-  schedule_launch_page_cleanup "$page"
+  schedule_stage_cleanup "$STAGE_FILE" "$STAGE_PID"
   json_ok "opened"
 }
 
@@ -861,7 +1030,7 @@ cmd_update() {
     esac
     shift
   done
-  local dsh current manager latest updatable="false"
+  local dsh current manager latest channel updatable="false"
   resolve_dsh || fail "dsh was not found. Install it first, or set the dshPath setting."
   dsh="$DSH_RESOLVED"
   current="$("$dsh" --version 2>/dev/null | head -n 1 || true)"
@@ -876,17 +1045,31 @@ cmd_update() {
     fi
     fail "dsh is not managed by mise or npm here; update it with its own installer."
   fi
-  latest="$(npm_latest)"
-  [[ -n $latest ]] || fail "Could not resolve the latest @deepseek-ai/dsh version from npm. If your network needs a proxy, set the proxy setting."
-  [[ -n $current && $current != "$latest" ]] && updatable="true"
+  resolve_update_target "${current:-0}" \
+    || fail "Could not resolve @deepseek-ai/dsh versions from npm. If your network needs a proxy, set the proxy setting."
+  latest="$UPDATE_TARGET"
+  channel="$UPDATE_CHANNEL"
+  # Only a strictly newer version is an update: `latest` can point below the
+  # installed prerelease (dsh publishes newer release candidates under `next`),
+  # and installing it anyway would silently downgrade.
+  if version_gt "$latest" "${current:-0}"; then updatable="true"; fi
 
   if [[ $mode == "check" ]]; then
     jq -n \
       --arg current "$current" \
       --arg latest "$latest" \
+      --arg channel "$channel" \
       --arg manager "$manager" \
       --argjson updatable "$updatable" \
-      '{ok: true, current: $current, latest: $latest, manager: $manager, updatable: $updatable}'
+      '{ok: true, current: $current, latest: $latest, channel: $channel, manager: $manager, updatable: $updatable}'
+    return 0
+  fi
+
+  if [[ $updatable != "true" ]]; then
+    if [[ -n $current ]] && version_gt "$current" "$latest"; then
+      fail "dsh $current is newer than every published version ($latest on $channel); refusing to downgrade."
+    fi
+    json_ok "dsh ${current:-unknown} is already up to date."
     return 0
   fi
 
@@ -1011,6 +1194,7 @@ case "$command" in
   update) cmd_update "$@" ;;
   version) cmd_version ;;
   run) cmd_run ;;
+  __serve-stage) cmd_serve_stage "${1:-}" ;;
   help | --help | -h) usage ;;
   "")
     usage >&2

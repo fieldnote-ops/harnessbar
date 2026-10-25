@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.3.4 — 2026-10-25
+
+Fix the update check, which could silently downgrade a newer dsh.
+
+- `update --check` compared the `latest` dist-tag against the installed version
+  with a plain string inequality. dsh publishes newer release candidates under
+  `next` (`latest` = `0.2.1-rc.2`, `next` = `0.2.1-rc.3`), so an installed
+  `0.2.1-rc.3` was reported as updatable and the update action installed
+  `0.2.1-rc.2`, downgrading it and then reporting success.
+- The check now reads `npm view @deepseek-ai/dsh dist-tags --json` and picks the
+  newest tag the install may follow: prerelease installs consider all tags
+  (so `0.2.1-rc.3` is found on `next`), stable installs only `latest`.
+- Versions are compared with semver precedence (numeric prerelease identifiers,
+  prerelease below release, build metadata ignored) instead of `!=`.
+- `updatable` is true only for a strictly newer target, `update` refuses to
+  install an older one (`refusing to downgrade`), and an already-current install
+  reports `already up to date` without invoking mise/npm.
+- The check JSON adds `channel`; the panel shows it for non-`latest` targets,
+  e.g. `dsh 0.2.1-rc.2 → 0.2.1-rc.3 (mise, next)`.
+- Tests cover prerelease tag selection, `rc.10 > rc.9`, no-downgrade on apply,
+  stable-only tracking, and the no-op apply path.
+
+
+## 0.3.3 — 2026-10-25
+
+Fix `Open UI` landing on `dsh web`'s "dsh web authentication required" page.
+
+- Root cause: `dsh web` mints its session cookie with `SameSite=Strict`, and
+  Chromium does not send that cookie on the redirect that follows a navigation
+  started from a `file://` document. The 0.2.2 redirect page therefore always
+  ended on dsh's 401, and the browser kept showing it.
+- `Open UI` now stages the login page behind a one-shot
+  `systemd-socket-activate` listener on `127.0.0.1:<random port>/<random path>`
+  and hands the launcher only that URL. The navigation is same-site (ports are
+  ignored), so the token exchange and its cookie work, while the token still
+  never appears in any process argument.
+- The listener answers the exact random path once with the redirect page, sends
+  `404` to anything else, and stops right after serving; the staged page is
+  removed and any listener left waiting is stopped after ~20 s.
+- `Content-Length` is measured in bytes, so the page's multibyte ellipsis no
+  longer truncates the response.
+- New runtime requirement: `systemd-socket-activate` (ships with systemd) serves
+  the staged page; the README requirements table lists it.
+- Tests cover the served response, the wrong-path `404`, the single-shot
+  shutdown, the TTL cleanup, and the byte-accurate length; docs replace the
+  `file://` handoff description and document the 401 symptom.
+
+
 ## 0.3.2 — 2026-10-21
 
 Fix the panel's proxy stdin path found in marketplace review:

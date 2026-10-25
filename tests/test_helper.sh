@@ -30,6 +30,16 @@ assert_exit() {
   assert_eq "$label (exit)" "$got" "$want"
 }
 
+# Minimal HTTP client for the staging-listener assertions: path, host, port.
+http_get() {
+  local path="$1" host="$2" port="$3"
+  exec 3<>"/dev/tcp/$host/$port" 2>/dev/null || return 1
+  printf 'GET %s HTTP/1.1\r\nHost: %s:%s\r\nConnection: close\r\n\r\n' "$path" "$host" "$port" >&3
+  cat <&3
+  exec 3<&- 3>&-
+  return 0
+}
+
 setup_env() {
   TESTROOT="$(mktemp -d /tmp/harnessbar-helper-test.XXXXXX)"
   export TESTROOT
@@ -141,6 +151,7 @@ out="$("$HELPER" update 2>/dev/null)"
 assert_exit "update apply" 0 $?
 assert_contains "update message" "$out" "9.9.10"
 assert_contains "npm install invoked" "$(cat "$STUB_LOG")" "npm install -g @deepseek-ai/dsh@9.9.10"
+
 
 # 9. stop -> stopped
 out="$("$HELPER" stop 2>/dev/null)"
@@ -270,7 +281,7 @@ run_log="$(cat "$run_out")"
 assert_contains "run announces the listener" "$run_log" "launch token captured and hidden"
 assert_not_contains "run keeps the token out of the log" "$run_log" "stub-secret"
 
-# 15. open hands the browser a private redirect page, never the token URL
+# 15. open hands the browser a same-site login page, never the token URL
 setup_env
 REAL_JQ="$(command -v jq)"
 cat > "$TESTROOT/bin/jq" <<EOF
@@ -287,7 +298,6 @@ printf 'active\n' > "$STUB_STATE_FILE"
 printf 'http://127.0.0.1:12345/?token=stub-secret\n' > "$STUB_URL_FILE"
 chmod 600 "$STUB_URL_FILE"
 : > "$STUB_SS_OPEN_FILE"
-export HARNESSBAR_OPEN_PAGE_TTL=1
 out="$("$HELPER" open 2>/dev/null)"
 assert_exit "open" 0 $?
 # `open` launches the web-app window detached; wait for the stub to record it.
@@ -296,40 +306,101 @@ for _ in $(seq 1 50); do
   sleep 0.05
 done
 open_log="$(cat "$STUB_OPEN_LOG" 2>/dev/null || true)"
-assert_contains "open used the web-app launcher" "$open_log" "DeepSeek Harness file://"
+assert_contains "open used the web-app launcher" "$open_log" "DeepSeek Harness http://127.0.0.1:"
 assert_not_contains "launcher argv must not contain the launch token" "$open_log" "stub-secret"
 assert_not_contains "launcher argv must not contain the token URL" "$open_log" "token="
-page_path="$(printf '%s' "$open_log" | sed -E 's#.*file://([^ ]+).*#\1#')"
-assert_file_exists "open staged a private redirect page" "$page_path"
-assert_eq "redirect page is owner-only" "$(stat -c %a "$page_path" 2>/dev/null)" "600"
-page_content="$(cat "$page_path" 2>/dev/null || true)"
-assert_contains "redirect page carries the launch URL" "$page_content" "token=stub-secret"
-assert_contains "redirect page is the DSH launch page" "$page_content" "DeepSeek Harness"
-assert_contains "redirect page uses a meta refresh" "$page_content" "http-equiv=\"refresh\""
+stage_url="${open_log##* }"
+stage_hostport="${stage_url#http://}"
+stage_host="${stage_hostport%%:*}"
+stage_port="${stage_hostport%%/*}"
+stage_port="${stage_port##*:}"
+stage_path="/${stage_hostport#*/}"
+stage_file="$(find "$XDG_RUNTIME_DIR/harnessbar" -maxdepth 1 -name 'open-*.http' 2>/dev/null | head -n 1)"
+assert_file_exists "open staged a private login page" "$stage_file"
+assert_eq "login page is owner-only" "$(stat -c %a "$stage_file" 2>/dev/null)" "600"
+assert_eq "login page pins the exact request path" "$(head -n 1 "$stage_file" 2>/dev/null)" \
+  "GET $stage_path HTTP/1.1"
+page_content="$(cat "$stage_file" 2>/dev/null || true)"
+assert_contains "login page carries the launch URL" "$page_content" "token=stub-secret"
+assert_contains "login page is the DSH launch page" "$page_content" "DeepSeek Harness"
+assert_contains "login page uses a meta refresh" "$page_content" "http-equiv=\"refresh\""
 assert_contains "meta refresh carries the URL unquoted" "$page_content" "content=\"0;url=http"
-assert_contains "redirect page uses a JS redirect" "$page_content" "location.replace("
+assert_contains "login page uses a JS redirect" "$page_content" "location.replace("
+declared="$(printf '%s' "$page_content" | sed -n 's/^Content-Length: \([0-9]*\).*/\1/p' | head -n 1)"
+staged_body_bytes="$(tail -n +2 -- "$stage_file" | awk 'p { printf "%s\n", $0 } /^\r$/ { p = 1 }' | wc -c)"
+assert_eq "Content-Length counts bytes, not characters" "$declared" "$staged_body_bytes"
 jq_args="$(cat "$TESTROOT/jq-args.log" 2>/dev/null || true)"
 assert_contains "escaping helper was invoked" "$jq_args" "jq"
 assert_not_contains "escaping subprocess argv must not contain the token" "$jq_args" "stub-secret"
-unset HARNESSBAR_OPEN_PAGE_TTL
+# The listener must refuse the path a port scanner would guess ...
+wrong_status="$(http_get "/open-$(date +%s).html" "$stage_host" "$stage_port" 2>/dev/null | head -n 1)"
+assert_contains "staged listener refuses a wrong path" "$wrong_status" "404"
+assert_file_exists "unserved login page survives a wrong-path request" "$stage_file"
+# ... and serve the page to the browser, then take itself down.
+response="$(http_get "$stage_path" "$stage_host" "$stage_port" 2>/dev/null)"
+assert_contains "staged listener answers the browser" "$response" "HTTP/1.1 200 OK"
+assert_contains "served page carries the launch URL" "$response" "token=stub-secret"
+assert_contains "served page redirects in HTML" "$response" 'http-equiv="refresh"'
+assert_contains "served page redirects in JS" "$response" "location.replace("
 for _ in $(seq 1 40); do
-  [[ -e $page_path ]] || break
+  [[ -e $stage_file ]] || break
   sleep 0.1
 done
-if [[ -e $page_path ]]; then
-  fail "private redirect page was not removed after its TTL"
+if [[ -e $stage_file ]]; then
+  fail "served login page was not removed"
 else
-  pass "private redirect page is removed after its TTL"
+  pass "served login page is removed"
+fi
+if http_get "$stage_path" "$stage_host" "$stage_port" >/dev/null 2>&1; then
+  fail "staged listener kept running after serving the page"
+else
+  pass "staged listener stops after serving the page"
 fi
 
-# 15b. URLs with reserved characters are safely embedded in the page
+# 15b. An unserved login page and its listener are removed after the TTL
+setup_env
+write_shell_config "12345" "$STUB_DSH_PATH"
+printf 'active\n' > "$STUB_STATE_FILE"
+printf 'http://127.0.0.1:12345/?token=stub-secret\n' > "$STUB_URL_FILE"
+chmod 600 "$STUB_URL_FILE"
+: > "$STUB_SS_OPEN_FILE"
+export HARNESSBAR_OPEN_PAGE_TTL=1
+out="$("$HELPER" open 2>/dev/null)"
+assert_exit "open for TTL" 0 $?
+for _ in $(seq 1 50); do
+  [[ -s "$STUB_OPEN_LOG" ]] && break
+  sleep 0.05
+done
+stage_url="$(cat "$STUB_OPEN_LOG")"; stage_url="${stage_url##* }"
+stage_hostport="${stage_url#http://}"
+stage_host="${stage_hostport%%:*}"
+stage_port="${stage_hostport%%/*}"
+stage_port="${stage_port##*:}"
+stage_path="/${stage_hostport#*/}"
+stage_file="$(find "$XDG_RUNTIME_DIR/harnessbar" -maxdepth 1 -name 'open-*.http' 2>/dev/null | head -n 1)"
+for _ in $(seq 1 40); do
+  [[ -e $stage_file ]] || break
+  sleep 0.1
+done
+if [[ -e $stage_file ]]; then
+  fail "unserved login page was not removed after its TTL"
+else
+  pass "unserved login page is removed after its TTL"
+fi
+if http_get "$stage_path" "$stage_host" "$stage_port" >/dev/null 2>&1; then
+  fail "staged listener outlived the TTL"
+else
+  pass "staged listener is stopped after the TTL"
+fi
+unset HARNESSBAR_OPEN_PAGE_TTL
+
+# 15bb. URLs with reserved characters are safely embedded in the page
 setup_env
 write_shell_config "12345" "$STUB_DSH_PATH"
 printf 'active\n' > "$STUB_STATE_FILE"
 printf 'http://127.0.0.1:12345/?token=stub-secret&scope=x%%22y\n' > "$STUB_URL_FILE"
 chmod 600 "$STUB_URL_FILE"
 : > "$STUB_SS_OPEN_FILE"
-export HARNESSBAR_OPEN_PAGE_TTL=1
 out="$("$HELPER" open 2>/dev/null)"
 assert_exit "open with reserved characters" 0 $?
 for _ in $(seq 1 50); do
@@ -338,11 +409,16 @@ for _ in $(seq 1 50); do
 done
 open_log="$(cat "$STUB_OPEN_LOG" 2>/dev/null || true)"
 assert_not_contains "reserved-character launch keeps token out of argv" "$open_log" "stub-secret"
-page_path="$(printf '%s' "$open_log" | sed -E 's#.*file://([^ ]+).*#\1#')"
-page_content="$(cat "$page_path" 2>/dev/null || true)"
-assert_contains "meta refresh escapes ampersands" "$page_content" "&amp;scope=x"
-assert_contains "JS redirect keeps a valid quoted string" "$page_content" "location.replace(\""
-unset HARNESSBAR_OPEN_PAGE_TTL
+stage_url="${open_log##* }"
+stage_hostport="${stage_url#http://}"
+stage_host="${stage_hostport%%:*}"
+stage_port="${stage_hostport%%/*}"
+stage_port="${stage_port##*:}"
+stage_path="/${stage_hostport#*/}"
+response="$(http_get "$stage_path" "$stage_host" "$stage_port" 2>/dev/null)"
+assert_contains "meta refresh escapes ampersands" "$response" "&amp;scope=x"
+assert_contains "JS redirect keeps a valid quoted string" "$response" "location.replace(\""
+
 
 # 15c. copy-install-command copies the two supported install commands
 setup_env
@@ -441,6 +517,59 @@ cp -r "$ROOT/systemd" "$copy_root/systemd"
 out="$("$copy_root/bin/harnessbar" setup-service 2>/dev/null)"
 assert_exit "setup-service from a path with & and spaces" 0 $?
 assert_contains "ExecStart keeps the literal & path" "$(cat "$HOME/.config/systemd/user/dsh-web.service")" "$copy_root/bin/harnessbar"
+
+# 18a. release candidates come from the newest published tag
+setup_env
+export STUB_DSH_VERSION=9.9.10-rc.2
+export STUB_NPM_LATEST=9.9.10-rc.2
+export STUB_NPM_NEXT=9.9.10-rc.3
+out="$("$HELPER" update --check 2>/dev/null)"
+assert_eq "prerelease follows the newest tag" "$(printf '%s' "$out" | jq -r '.latest')" "9.9.10-rc.3"
+assert_eq "prerelease update reports its channel" "$(printf '%s' "$out" | jq -r '.channel')" "next"
+assert_eq "prerelease update offered" "$(printf '%s' "$out" | jq -r '.updatable')" "true"
+: > "$STUB_LOG"
+out="$("$HELPER" update 2>/dev/null)"
+assert_exit "prerelease update applies" 0 $?
+assert_contains "prerelease update installs the newest tag" "$(cat "$STUB_LOG")" \
+  "npm install -g @deepseek-ai/dsh@9.9.10-rc.3"
+
+# 18b. an installed version above every tag is never downgraded
+setup_env
+export STUB_DSH_VERSION=9.9.10-rc.9
+export STUB_NPM_LATEST=9.9.10-rc.2
+export STUB_NPM_NEXT=9.9.10-rc.8
+out="$("$HELPER" update --check 2>/dev/null)"
+assert_eq "newer-than-tags is not an update" "$(printf '%s' "$out" | jq -r '.updatable')" "false"
+assert_eq "newer-than-tags still reports the tag target" "$(printf '%s' "$out" | jq -r '.latest')" "9.9.10-rc.8"
+: > "$STUB_LOG"
+out="$("$HELPER" update 2>/dev/null)"
+assert_eq "apply refuses to downgrade" "$?" "1"
+assert_contains "downgrade refusal is explained" "$out" "refusing to downgrade"
+assert_not_contains "no install runs on a downgrade" "$(cat "$STUB_LOG")" "install -g"
+
+# 18c. prerelease identifiers compare numerically, not as strings
+setup_env
+export STUB_DSH_VERSION=9.9.10-rc.9
+export STUB_NPM_LATEST=9.9.10-rc.9
+export STUB_NPM_NEXT=9.9.10-rc.10
+out="$("$HELPER" update --check 2>/dev/null)"
+assert_eq "rc.10 is newer than rc.9" "$(printf '%s' "$out" | jq -r '.updatable')" "true"
+assert_eq "rc.10 is the update target" "$(printf '%s' "$out" | jq -r '.latest')" "9.9.10-rc.10"
+
+# 18d. a stable install only follows the latest tag
+setup_env
+export STUB_DSH_VERSION=9.9.9
+export STUB_NPM_LATEST=9.9.9
+export STUB_NPM_NEXT=10.0.0-rc.1
+out="$("$HELPER" update --check 2>/dev/null)"
+assert_eq "stable install tracks latest only" "$(printf '%s' "$out" | jq -r '.latest')" "9.9.9"
+assert_eq "stable install ignores next" "$(printf '%s' "$out" | jq -r '.updatable')" "false"
+: > "$STUB_LOG"
+out="$("$HELPER" update 2>/dev/null)"
+assert_exit "apply when already up to date" 0 $?
+assert_contains "up-to-date apply says so" "$out" "already up to date"
+assert_not_contains "up-to-date apply installs nothing" "$(cat "$STUB_LOG")" "install -g"
+unset STUB_DSH_VERSION STUB_NPM_LATEST STUB_NPM_NEXT
 
 printf '\n%s/%s helper tests passed\n' "$((total - failed))" "$total"
 (( failed == 0 ))

@@ -77,8 +77,15 @@ Panel {
   function updateLine() {
     if (updateInfo && updateInfo.current) {
       var text = "dsh " + updateInfo.current
-      if (updateInfo.latest) text += " → " + updateInfo.latest
-      if (updateInfo.manager) text += " (" + updateInfo.manager + ")"
+      if (updateInfo.latest && updateInfo.updatable === true) {
+        text += " → " + updateInfo.latest
+        var notes = []
+        if (updateInfo.manager) notes.push(String(updateInfo.manager))
+        if (updateInfo.channel && updateInfo.channel !== "latest") notes.push(String(updateInfo.channel))
+        if (notes.length > 0) text += " (" + notes.join(", ") + ")"
+      } else if (updateInfo.manager) {
+        text += " (" + updateInfo.manager + ")"
+      }
       return text
     }
     return version ? "dsh " + version : "dsh version unknown"

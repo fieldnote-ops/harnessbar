@@ -26,7 +26,9 @@
 - **登录自启**：可选 `systemctl --user enable`，无需终端。
 - **可观测**：面板里有版本、host:port、健康状态，以及脱敏后的 journal 尾部日志。
 - **可更新**：识别 mise / npm 安装方式；面板打开时会静默检查新版，显示
-  当前 → 最新版本，确认后更新并重启服务。
+  当前 → 最新版本，确认后更新并重启服务。更新按发布标签判断：已安装预发布版时
+  取 `latest` 与 `next` 中较新的一个（dsh 把 RC 发布在 `next`），稳定版只跟随
+  `latest`，已经比所有标签都新的版本绝不会被更旧的版本覆盖。
 - **代理感知**：可选的 `proxy` 设置会同时作用于服务与更新命令——在需要本地代理
   才能访问 DeepSeek API 的网络里很关键。
 - **可迁移**：能识别旧的 `~/.local/bin/dsh-web*` 单元并原地修复。
@@ -36,8 +38,9 @@
 | 依赖 | 用途 | 说明 |
 |---|---|---|
 | Omarchy 4（Quattro） | 提供 shell 与状态栏 | 在 Omarchy 4.0.6 上开发与验证 |
-| `dsh` | 被管理的 Web UI | 已测试 `@deepseek-ai/dsh` 0.2.1-rc.2；用 mise 或 npm 安装 |
+| `dsh` | 被管理的 Web UI | 已测试 `@deepseek-ai/dsh` 0.2.1-rc.3；用 mise 或 npm 安装 |
 | systemd 用户管理器 | 运行后台服务 | Omarchy 默认具备 |
+| `systemd-socket-activate` | 为 **Open UI** 提供一次性登录页 | 随 systemd 提供；缺失时 Open UI 会给出明确错误 |
 | `jq` | 读取内联设置、格式化状态 JSON | Omarchy 默认自带 |
 | `wl-clipboard` | 可选，用于「Copy URL」 | 未安装时按钮会给出明确错误 |
 
@@ -156,14 +159,20 @@ omarchy-shell shell call io.github.fieldnote-ops.harnessbar refresh ''
 - 服务是普通 systemd **用户**单元，不会在用户登出后继续运行。
 - 启动 URL 是凭据：只存放在 `$XDG_RUNTIME_DIR`（600），不打印进 journal、不在
   面板中明文展示，只有你主动点击 Copy 才复制。请同样注意截图、剪贴板历史与日志分享。
-- **Open UI 不会把 token 放进进程参数**：它把 token URL 写入 `$XDG_RUNTIME_DIR`
-  下仅属主可读的 `file://` 重定向页，只把该文件路径交给启动器，并在约 20 秒后删除。
-  因此 helper、转义子进程、启动器和浏览器的 `/proc/<pid>/cmdline` 里都没有凭据；
-  token 仍会出现在浏览器地址栏/历史中（这是打开页面本身所必需的）。
+- **Open UI 不会把 token 放进进程参数**：它由一次性回环监听器
+  （`systemd-socket-activate`，地址 `127.0.0.1:<随机端口>/<随机路径>`）提供私有登录页，
+  只把该 URL 交给启动器，页面再跳转到带 token 的 URL。因此 helper、转义子进程、
+  启动器和浏览器的 `/proc/<pid>/cmdline` 里都没有凭据；token 仍会出现在浏览器
+  地址栏/历史中（这是打开页面本身所必需的）。
+- **为什么不用 `file://` 页面**：`dsh web` 的会话 cookie 带 `SameSite=Strict`，
+  Chromium 不会在由本地文件发起的跳转中发送它，页面会停在 dsh 的 401 上。改从
+  `127.0.0.1` 提供页面（端口不影响同站判定）后 cookie 才能生效。监听器只响应那条
+  随机路径一次，其余请求返回 404，服务完成后立即停止（浏览器没来则约 20 秒后停止）。
 - **从 0.2.1 或更早版本升级**：旧插件启动的浏览器进程可能仍把旧 token 留在其进程参数中，
   直到该浏览器进程退出。关闭 DeepSeek Harness 窗口/浏览器后从面板重新打开即可消除；
-  重启 `dsh-web.service` 也会让旧 token 失效。新打开的窗口始终走私有重定向页。
-- 更新操作复用你已有的 mise/npm，不会静默下载。
+  重启 `dsh-web.service` 也会让旧 token 失效。新打开的窗口始终走私有回环登录页。
+- 更新操作复用你已有的 mise/npm，不会静默下载；只会安装严格更新的已发布版本，
+  发现当前版本比 `latest` 新时不会降级。
 - Omarchy 自动安全基线会报告本插件有意使用的能力：`service-management`
   （systemd 用户单元）与 `package-manager`（mise/npm 更新动作），以及来自
   否定性文档的 `privilege` 和来自开发章节 clone 命令的 `remote-build`。这些行为

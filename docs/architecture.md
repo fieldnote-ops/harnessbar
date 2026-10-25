@@ -120,12 +120,21 @@ helper falls back to the runtime URL plus listener probe and reports
 - No privileged operations: no `sudo`, no `pkexec`, no system files.
 - No remote code execution: no `curl | sh`; the update path only calls the
   user's existing mise/npm with an explicit version.
+- Update target: `update --check` reads `npm view … dist-tags` and picks the
+  newest tag an installed version may follow (prerelease installs consider all
+  tags, stable installs only `latest`), then compares versions with semver
+  precedence. Only a strictly newer target is offered or installed, so a `next`
+  build is never replaced by an older `latest`.
 - Credential handling: the launch token never reaches the journal, the panel,
   the README screenshots, or any process argument. `open` stages a private
-  redirect page under the runtime directory (mode 600 in a 700 directory) and
-  passes only the `file://` path to the launcher; the page redirects to the
-  tokenized URL and is removed after a short TTL. It is only copied on explicit
-  request.
+  login page (mode 600 in a 700 runtime directory) and serves it from a
+  one-shot `systemd-socket-activate` listener on
+  `127.0.0.1:<random port>/<random path>`, handing the launcher only that URL.
+  The page redirects to the tokenized URL and is removed once served, or after
+  a short TTL. Serving it from `127.0.0.1` rather than a `file://` page is
+  required: `dsh web` mints a `SameSite=Strict` cookie, which Chromium does not
+  send on the redirect following a navigation started from a local file, so a
+  file handoff ends on dsh's 401 page. It is only copied on explicit request.
 - Process control: no `/tmp` PID files and no signal delivery from untrusted
   state. `stop` goes through systemd.
 - The plugin runs unsandboxed inside the shell, like every Omarchy plugin; the

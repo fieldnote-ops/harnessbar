@@ -29,7 +29,11 @@ A plain toggle starts a process and hopes for the best. harnessbar treats
   the panel.
 - **Updatable**: detects mise vs npm installations; the panel quietly checks
   for a newer dsh when opened, shows the installed → latest versions, and
-  updates on request with a confirm (then restarts the service).
+  updates on request with a confirm (then restarts the service). Updates follow
+  the published tags: an installed prerelease takes the newest of `latest` and
+  `next` (dsh publishes release candidates under `next`), a stable install only
+  follows `latest`, and a version that is already newer than every tag is never
+  replaced by an older one.
 - **Proxy-aware**: the optional `proxy` setting is applied to the service and
   to update commands — important on networks where the DeepSeek API needs a
   local proxy.
@@ -41,8 +45,9 @@ A plain toggle starts a process and hopes for the best. harnessbar treats
 | Dependency | Why | Notes |
 |---|---|---|
 | Omarchy 4 (Quattro) | Hosts the shell and the bar widget | Developed and tested on Omarchy 4.0.6 |
-| `dsh` | The web UI this widget manages | Tested with `@deepseek-ai/dsh` 0.2.1-rc.2; install with mise or npm |
+| `dsh` | The web UI this widget manages | Tested with `@deepseek-ai/dsh` 0.2.1-rc.3; install with mise or npm |
 | systemd user manager | Runs the background service | Standard on Omarchy |
+| `systemd-socket-activate` | Serves the one-shot login page **Open UI** hands the browser | Ships with systemd; `Open UI` reports a clear error when it is missing |
 | `jq` | Reads inline settings and formats the status JSON | Present on Omarchy by default |
 | `wl-clipboard` | Optional, for **Copy URL** | The button reports a clear error when absent |
 
@@ -171,19 +176,29 @@ is detected and can be repaired instead of duplicated.
   mode 600, never printed into the journal, never shown in the panel, and only
   copied when you ask. Treat screenshots, clipboard history, and shared logs
   accordingly.
-- **Open UI does not put the token in process arguments.** It stages a
-  private, owner-only `file://` redirect page under `$XDG_RUNTIME_DIR`, passes
-  only that file path to the launcher, and removes the page shortly afterwards.
-  The token therefore does not appear in `/proc/<pid>/cmdline` for the helper,
-  the escaping helpers, the launcher, or the browser; it does of course appear
-  in the browser's own address bar/history while the page is open.
+- **Open UI does not put the token in process arguments.** It serves a private
+  login page from a one-shot loopback listener (`systemd-socket-activate` on
+  `127.0.0.1:<random port>/<random path>`) and passes only that URL to the
+  launcher. The page redirects to the tokenized URL, so the token never appears
+  in `/proc/<pid>/cmdline` for the helper, the escaping helpers, the launcher,
+  or the browser; it does of course appear in the browser's own address
+  bar/history while the page is open.
+- **Why a listener instead of a `file://` page:** `dsh web` mints its session
+  cookie with `SameSite=Strict`. Chromium does not send that cookie on the
+  redirect that follows a navigation started from a `file://` document, so a
+  local-file handoff lands on dsh's `401` page. Serving the page from
+  `127.0.0.1` keeps the navigation same-site (the port does not matter) and the
+  cookie is accepted. The listener answers one request for its random path,
+  returns `404` to anything else, and is stopped immediately afterwards (or
+  after ~20 s if the browser never asks).
 - **Upgrading from 0.2.1 or earlier:** a browser window launched by the old
   plugin may still carry the old launch token in its process arguments until
   that browser process exits. Close the DeepSeek Harness window/browser once
   and reopen it from the panel; restarting `dsh-web.service` also rotates the
-  old token. New opens always use the private redirect page.
+  old token. New opens always use the private loopback login page.
 - The update action uses your existing mise/npm installation; nothing is
-  downloaded silently.
+  downloaded silently. It only installs a strictly newer published version and
+  refuses to downgrade a `next` build to the older `latest` tag.
 - Omarchy's automated marketplace baseline reports the capabilities this plugin
   deliberately uses: `service-management` (systemd user unit) and
   `package-manager` (mise/npm update action), plus `privilege` from clearly

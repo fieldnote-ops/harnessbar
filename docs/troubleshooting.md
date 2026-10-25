@@ -91,16 +91,41 @@ the UI afterwards.
 
 ## Update checks fail
 
-Update checks run `npm view @deepseek-ai/dsh version` with your optional
-`proxy` setting and a private npm download cache under
+Update checks run `npm view @deepseek-ai/dsh dist-tags --json` with your
+optional `proxy` setting and a private npm download cache under
 `${XDG_CACHE_HOME:-~/.cache}/harnessbar/npm`. The private cache exists so an
 unmounted drive or an unwritable global npm cache cannot break updates. If the
 check still fails, verify the proxy URL and that `npm` itself works in your
 terminal:
 
 ```sh
-npm view @deepseek-ai/dsh version
+npm view @deepseek-ai/dsh dist-tags --json
+npm view @deepseek-ai/dsh versions --json | tail -5
 ```
+
+## No update is offered, or the update looks like a downgrade
+
+dsh publishes release candidates: `latest` is the recommended build, `next`
+carries newer candidates, `alpha` the pre-release line. `update --check`
+therefore reports a `channel` next to `current` and `latest`:
+
+- an installed **prerelease** (anything with `-rc`, `-alpha`, `-beta`) takes the
+  newest of all published tags, so `0.2.1-rc.2` is offered `0.2.1-rc.3` even
+  though the newer build sits on `next`;
+- an installed **stable** release only follows `latest`, so a prerelease never
+  replaces it;
+- an installed version that is already newer than every tag is reported as up
+  to date, and `update` refuses to install an older one
+  (`refusing to downgrade`).
+
+If `latest` points below what you have installed and you want the release
+candidate anyway, install it explicitly:
+
+```sh
+mise use -g npm:@deepseek-ai/dsh@<version>
+```
+
+Restarting the service afterwards makes the panel show the new version.
 
 The update action only supports mise- and npm-managed `dsh` installations; a
 manually installed copy is reported as `manual` (no npm query is attempted) and
@@ -108,13 +133,28 @@ must be updated by hand. Proxy userinfo is stripped from the service log line,
 and the panel's journal view redacts common token, Authorization, and Bearer
 formats plus URL credentials.
 
-## Open UI opens a blank/local page
+## Open UI shows "dsh web authentication required"
 
-`Open UI` passes the browser a private `file://` redirect page instead of the
-token URL, so the token never appears in process arguments. If that page stays
-blank, the launcher or browser may have refused the local file; check the
-browser console and confirm the runtime directory is `$XDG_RUNTIME_DIR/harnessbar`.
-The page is deleted about 20 seconds after launch; opening again recreates it.
+That text is `dsh web`'s own 401 page: the browser reached the UI without a
+valid session cookie. `Open UI` serves a one-shot login page from
+`127.0.0.1` so the cookie exchange stays same-site, then hands the launcher
+only that URL; the page is gone once the browser has fetched it.
+
+If the message persists:
+
+- Open again. Each `Open UI` stages a fresh page and a fresh port; a stale
+  window left from an earlier session is not reused, so a new window is
+  expected to authenticate.
+- Check that `systemd-socket-activate` exists (it ships with systemd) — the
+  helper refuses to open the UI without it.
+- Confirm the runtime directory is writable: `$XDG_RUNTIME_DIR/harnessbar`
+  must be owned by you, mode 700. Staged pages are the `open-*.http` files
+  there and are removed after serving or within about 20 seconds.
+- If you pasted the token URL into a window opened from a local file, or the
+  cookie was cleared, reload the page once (the cookie is already set) or run
+  `"$HB" open` again.
+- The cookie is minted for one `host:port`. After changing `port`, old windows
+  are unauthenticated by design; reopen from the panel.
 
 ## An old browser process still shows the launch token in its argv
 
