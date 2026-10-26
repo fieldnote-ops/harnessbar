@@ -9,9 +9,15 @@ printf '\n' >> "${STUB_LOG:-/dev/null}"
 case "${1:-}" in
   view)
     if [[ "${3:-}" == "dist-tags" ]]; then
-      printf '{"latest":"%s","next":"%s","alpha":"%s"}\n' \
+      # npm returns an object, or an array holding that object from a cold cache.
+      tags="$(printf '{"latest":"%s","next":"%s","alpha":"%s"}' \
         "${STUB_NPM_LATEST:-9.9.10}" "${STUB_NPM_NEXT:-${STUB_NPM_LATEST:-9.9.10}}" \
-        "${STUB_NPM_ALPHA:-9.9.10-alpha.1}"
+        "${STUB_NPM_ALPHA:-9.9.10-alpha.1}")"
+      case "${STUB_NPM_TAGS_SHAPE:-object}" in
+        array) printf '[%s]\n' "$tags" ;;
+        garbage) printf '{"latest":"not-a-version","next":"nope"}\n' ;;
+        *) printf '%s\n' "$tags" ;;
+      esac
     else
       printf '%s\n' "${STUB_NPM_LATEST:-9.9.10}"
     fi

@@ -632,5 +632,21 @@ assert_contains "up-to-date apply says so" "$out" "already up to date"
 assert_not_contains "up-to-date apply installs nothing" "$(cat "$STUB_LOG")" "install -g"
 unset STUB_DSH_VERSION STUB_NPM_LATEST STUB_NPM_NEXT
 
+# 18e. npm's array-shaped dist-tags output (cold cache) is parsed the same way
+setup_env
+export STUB_NPM_TAGS_SHAPE=array
+out="$("$HELPER" update --check 2>/dev/null)"
+assert_exit "update check with array-shaped tags" 0 $?
+assert_eq "array-shaped tags still yield the latest version" "$(printf '%s' "$out" | jq -r '.latest')" "9.9.10"
+assert_eq "array-shaped tags still report updatable" "$(printf '%s' "$out" | jq -r '.updatable')" "true"
+
+# 18f. non-version dist-tag values fail closed instead of becoming a target
+setup_env
+export STUB_NPM_TAGS_SHAPE=garbage
+out="$("$HELPER" update --check 2>/dev/null)"
+assert_eq "garbage tags fail the check" "$?" "1"
+assert_contains "garbage tags are explained" "$out" "Could not resolve"
+unset STUB_NPM_TAGS_SHAPE
+
 printf '\n%s/%s helper tests passed\n' "$((total - failed))" "$total"
 (( failed == 0 ))

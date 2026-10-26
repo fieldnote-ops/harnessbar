@@ -267,11 +267,14 @@ version_gt() {
   return 1
 }
 
+# npm returns the dist-tag object normally, but an array holding that object
+# when it describes the package from a cold cache; both shapes are accepted.
 npm_published_tags() {
   local cache
   cache="$(npm_private_cache)"
   ( export npm_config_cache="$cache"; run_with_proxy npm view @deepseek-ai/dsh dist-tags --json 2>/dev/null ) \
-    | jq -r 'to_entries[] | "\(.key) \(.value)"' 2>/dev/null || true
+    | jq -r '(if type == "array" then (map(select(type == "object")) | .[0] // {}) else . end)
+             | to_entries[] | "\(.key) \(.value)"' 2>/dev/null || true
 }
 
 # Resolve the version an update should install. dsh publishes release
@@ -290,6 +293,9 @@ resolve_update_target() {
   if [[ $current == *-* ]]; then
     while read -r tag version; do
       [[ -n $tag && -n $version ]] || continue
+      # Ignore anything that is not a version: unexpected npm output must fail
+      # closed below, never become an update target.
+      [[ $version =~ ^[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$ ]] || continue
       if [[ -z $candidate ]] || version_gt "$version" "$candidate"; then
         candidate="$version"
         channel="$tag"
@@ -298,6 +304,7 @@ resolve_update_target() {
   else
     while read -r tag version; do
       [[ $tag == "latest" ]] || continue
+      [[ $version =~ ^[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$ ]] || continue
       candidate="$version"
       channel="$tag"
       break

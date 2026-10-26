@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.6 — 2026-10-27
+
+Fix the update check reading npm's dist-tags output as a version.
+
+- `npm view @deepseek-ai/dsh dist-tags --json` returns the dist-tag object, but
+  from a cold cache it returns an array holding that object. 0.3.4 parsed only
+  the object shape, so every tag line came out as `0 {"alpha":…}` and the whole
+  JSON became the "latest" version: the check reported `updatable: false` with a
+  JSON blob as the version and never offered a real update.
+- Both shapes are now accepted, and a tag value that does not look like a
+  version is ignored so unexpected npm output fails closed with the resolve
+  error instead of becoming an update target.
+- Tests: array-shaped dist-tags parse to the same result, and non-version tag
+  values fail the check (152 helper assertions).
+
+
 ## 0.3.5 — 2026-10-27
 
 Fix the cross-user leak in the 0.3.3 login handoff found in marketplace review.
