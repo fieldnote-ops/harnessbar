@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.7 — 2026-10-27
+
+Surface why a dsh update failed instead of "run it in a terminal".
+
+- `update` discarded mise/npm output, so the panel could only say
+  "mise update failed". The failure reason is now captured, redacted, trimmed
+  and returned in the panel message.
+- mise's npm backend (aube) refuses packages with fewer than 1000 weekly
+  downloads; a brand-new dsh release hits that guard. That case now reports the
+  cause and the exact `allow_low_downloads` approval instead of a generic error.
+- Docs add the guard, the approval snippet, and how to verify before approving.
+- Tests cover both the guard message and a generic mise failure (159 assertions).
+
+
 ## 0.3.6 — 2026-10-27
 
 Fix the update check reading npm's dist-tags output as a version.

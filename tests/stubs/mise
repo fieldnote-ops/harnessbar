@@ -11,6 +11,18 @@ case "${1:-}" in
     printf '%s\n' "${STUB_DSH_PATH:-/nonexistent/dsh}"
     ;;
   use)
+    if [[ -n ${STUB_MISE_FAIL:-} ]]; then
+      case $STUB_MISE_FAIL in
+        guard)
+          printf 'mise ERROR Failed to install %s: aube install failed: refusing to add @deepseek-ai/dsh: only 0 weekly downloads (threshold: 1000)\n' "${3:-}" >&2
+          printf '  help: after verifying the package, set `allow_low_downloads = true` on `npm:@deepseek-ai/dsh` to approve it\n' >&2
+          ;;
+        *)
+          printf 'mise ERROR something broke for %s\n' "${3:-}" >&2
+          ;;
+      esac
+      exit 1
+    fi
     exit 0
     ;;
 esac

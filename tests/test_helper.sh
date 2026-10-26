@@ -632,6 +632,31 @@ assert_contains "up-to-date apply says so" "$out" "already up to date"
 assert_not_contains "up-to-date apply installs nothing" "$(cat "$STUB_LOG")" "install -g"
 unset STUB_DSH_VERSION STUB_NPM_LATEST STUB_NPM_NEXT
 
+# 18g. a mise install refused by its download guard explains the approval
+setup_env
+mkdir -p "$HOME/.local/share/mise/shims"
+cp "$STUBS/dsh" "$HOME/.local/share/mise/shims/dsh"
+chmod +x "$HOME/.local/share/mise/shims/dsh"
+write_shell_config "12345" ""
+: > "$STUB_LOG"
+out="$(STUB_MISE_FAIL=guard "$HELPER" update 2>/dev/null)"
+assert_eq "mise guard failure exits nonzero" "$?" "1"
+assert_contains "mise guard failure names the downloads threshold" "$out" "1000 weekly downloads"
+assert_contains "mise guard failure names the approval" "$out" "allow_low_downloads"
+assert_not_contains "mise guard failure leaks no token" "$out" "stub-secret"
+
+# 18h. a plain mise failure reports the tool's own reason
+setup_env
+mkdir -p "$HOME/.local/share/mise/shims"
+cp "$STUBS/dsh" "$HOME/.local/share/mise/shims/dsh"
+chmod +x "$HOME/.local/share/mise/shims/dsh"
+write_shell_config "12345" ""
+: > "$STUB_LOG"
+out="$(STUB_MISE_FAIL=generic "$HELPER" update 2>/dev/null)"
+assert_eq "mise failure exits nonzero" "$?" "1"
+assert_contains "mise failure surfaces the tool reason" "$out" "something broke"
+assert_not_contains "mise failure keeps the old generic wording" "$out" "run it in a terminal"
+
 # 18e. npm's array-shaped dist-tags output (cold cache) is parsed the same way
 setup_env
 export STUB_NPM_TAGS_SHAPE=array

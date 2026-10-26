@@ -89,6 +89,30 @@ its connection and running agent tasks may be interrupted. That is why the
 panel asks for confirmation. Session data lives in `~/.dsh` and survives; reopen
 the UI afterwards.
 
+## "mise update failed" in the panel
+
+The panel now carries the tool's own reason. The common one is mise's download
+guard: since mise 2026.10 npm tools install through its embedded aube client,
+which refuses packages with fewer than 1000 weekly downloads. A freshly
+published dsh release reports 0, so the newest release candidate is blocked
+until it accumulates downloads or you approve it explicitly.
+
+Verify the version first, then approve it for this package only:
+
+```sh
+npm view @deepseek-ai/dsh@<version> version
+```
+
+```toml
+# ~/.config/mise/config.toml
+[tools]
+"npm:@deepseek-ai/dsh" = { version = "<version>", allow_low_downloads = true }
+```
+
+`mise install npm:@deepseek-ai/dsh` (or **Update** in the panel) then proceeds.
+The approval switches off a supply-chain check for that package, so pin an exact
+version you checked and revoke the option if you change registry.
+
 ## Update checks fail
 
 Update checks run `npm view @deepseek-ai/dsh dist-tags --json` with your

@@ -1120,16 +1120,32 @@ cmd_update() {
     return 0
   fi
 
+  # Surface the tool's own reason instead of "run it in a terminal": the panel is
+  # the only place most users will ever see this. Redact and trim, because the
+  # output can carry a proxy URL or a token-shaped string.
+  local update_out="" reason=""
+  update_reason() {
+    reason="$(printf '%s\n' "$update_out" | redact \
+      | grep -E '(ERROR|[Ff]ailed|[Ee]rror)' | tail -n 1)"
+    [[ -n $reason ]] || reason="$(printf '%s\n' "$update_out" | redact | grep -v '^[[:space:]]*$' | tail -n 1)"
+    reason="$(printf '%s' "$reason" | tr -s '[:space:]' ' ')"
+    printf '%s' "${reason:0:400}"
+  }
   case $manager in
     mise)
-      run_with_proxy mise use -g "npm:@deepseek-ai/dsh@$latest" >/dev/null 2>&1 \
-        || fail "mise update failed; run it in a terminal to see the error."
+      if ! update_out="$(run_with_proxy mise use -g "npm:@deepseek-ai/dsh@$latest" 2>&1)"; then
+        if printf '%s' "$update_out" | grep -q 'allow_low_downloads'; then
+          fail "mise refused $latest: its npm backend blocks packages with fewer than 1000 weekly downloads. Approve this package by setting allow_low_downloads = true on npm:@deepseek-ai/dsh in ~/.config/mise/config.toml."
+        fi
+        fail "mise update failed: $(update_reason)"
+      fi
       ;;
     npm)
       local cache
       cache="$(npm_private_cache)"
-      ( export npm_config_cache="$cache"; run_with_proxy npm install -g "@deepseek-ai/dsh@$latest" ) >/dev/null 2>&1 \
-        || fail "npm update failed; run it in a terminal to see the error."
+      if ! update_out="$( export npm_config_cache="$cache"; run_with_proxy npm install -g "@deepseek-ai/dsh@$latest" 2>&1 )"; then
+        fail "npm update failed: $(update_reason)"
+      fi
       ;;
     *)
       fail "dsh is not managed by mise or npm here; update it with its own installer."
