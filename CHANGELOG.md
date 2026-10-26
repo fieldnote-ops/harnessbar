@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.5 — 2026-10-27
+
+Fix the cross-user leak in the 0.3.3 login handoff found in marketplace review.
+
+- The one-shot handoff URL reached the browser launcher through argv, and
+  fetching it returned the page that carries the dsh launch token. Loopback
+  binding, a random path and a 20 s lifetime did not authenticate the caller, so
+  another local user could read the URL from `/proc/<pid>/cmdline` and race the
+  browser to it.
+- The listener now attributes the caller before serving: it maps its own
+  connection inode to the peer socket via `ss -tnpe`, and serves only when that
+  socket's `uid:` is this user. Anything unexpected - no `ss`, no matching
+  socket, no uid - fails closed with `403` and does not consume the staged page,
+  so the real browser can still ask for it.
+- `ss` (iproute2) becomes a documented requirement for `Open UI`; the helper
+  refuses to open the page without it instead of serving unattributable
+  requests.
+- Tests: a deterministic stub proves a different uid is refused without
+  consuming the page, and a real cross-uid client (`sudo -u nobody curl`) is
+  exercised in CI where passwordless sudo exists; helper assertions are now 147.
+
+
 ## 0.3.4 — 2026-10-25
 
 Fix the update check, which could silently downgrade a newer dsh.

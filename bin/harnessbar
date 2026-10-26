@@ -671,12 +671,40 @@ write_stage_response() {
   STAGE_TARGET="$target"
 }
 
+# True only when the peer end of this connection belongs to this user. The
+# handoff URL is in launcher argv (world-readable), and fetching it yields the
+# page that carries the dsh launch token, so the URL is a bearer credential
+# unless the listener attributes the caller. `ss -e` reports the owning uid of
+# the peer socket from sock_diag; process names/inodes are hidden for other
+# users, but the uid is not, which makes this the check that fails closed.
+# Anything unexpected (no ss, no matching socket, no uid) denies the request.
+stage_peer_is_self() {
+  local port="${1:-}" inode="" line="" peer="" peer_port="" client="" uid="" me
+  [[ $port =~ ^[0-9]+$ ]] || return 1
+  command -v ss >/dev/null 2>&1 || return 1
+  inode="$(readlink "/proc/self/fd/0" 2>/dev/null || true)"
+  inode="${inode#socket:[}"
+  inode="${inode%]}"
+  [[ $inode =~ ^[0-9]+$ ]] || return 1
+  line="$(ss -tnpeH "sport = :$port" 2>/dev/null | grep -F "ino:$inode " | head -n 1 || true)"
+  [[ -n $line ]] || return 1
+  peer="$(printf '%s\n' "$line" | awk '{print $5}')"
+  peer_port="${peer##*:}"
+  [[ $peer_port =~ ^[0-9]+$ ]] || return 1
+  client="$(ss -tnpeH "sport = :$peer_port" 2>/dev/null \
+    | awk -v want=":$peer_port" '$4 ~ (want "$") { print; exit }' || true)"
+  [[ -n $client ]] || return 1
+  uid="$(printf '%s\n' "$client" | grep -oE 'uid:[0-9]+' | head -n 1 | cut -d: -f2 || true)"
+  me="$(id -u 2>/dev/null || true)"
+  [[ -n $uid && -n $me && $uid == "$me" ]]
+}
+
 # Serve the staged response to the first client that asks for the exact
 # single-use path, then take the listener down. Runs as the per-connection
 # child of systemd-socket-activate, so stdin/stdout are the connection and the
 # parent process is the listener.
 cmd_serve_stage() {
-  local file="${1:-}" expected="" method="" target="" version="" header=""
+  local file="${1:-}" port="${2:-}" expected="" method="" target="" version="" header=""
   [[ -n $file && -s $file ]] || return 0
   expected="$(head -n 1 -- "$file" 2>/dev/null || true)"
   expected="${expected#GET /}"
@@ -692,6 +720,13 @@ cmd_serve_stage() {
     header="${header%$'\r'}"
     [[ -z $header ]] && break
   done
+  if ! stage_peer_is_self "$port"; then
+    # Do not consume the page: the real browser may not have asked yet.
+    local body='This handoff page belongs to the user who opened it.'
+    printf 'HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %s\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n%s' \
+      "${#body}" "$body"
+    return 0
+  fi
   if [[ -n $expected && $method == "GET" && $target == "/$expected" ]]; then
     tail -n +2 -- "$file" 2>/dev/null || true
     rm -f -- "$file" 2>/dev/null || true
@@ -710,7 +745,7 @@ start_stage_listener() {
   for attempt in 1 2 3 4 5 6 7 8; do
     port=$(( 32000 + RANDOM % 20000 ))
     "${runner[@]}" systemd-socket-activate --listen="127.0.0.1:$port" \
-      --accept --inetd -- "$ROOT/bin/harnessbar" __serve-stage "$file" >/dev/null 2>&1 &
+      --accept --inetd -- "$ROOT/bin/harnessbar" __serve-stage "$file" "$port" >/dev/null 2>&1 &
     pid=$!
     sleep 0.15
     if kill -0 "$pid" 2>/dev/null; then
@@ -752,6 +787,11 @@ cmd_open() {
   sweep_launch_pages
   if ! command -v systemd-socket-activate >/dev/null 2>&1; then
     fail "systemd-socket-activate is required to hand the browser a login page; install systemd."
+  fi
+  if ! command -v ss >/dev/null 2>&1; then
+    # The handoff URL is in launcher argv, so the listener only serves a caller
+    # it can attribute to this user; without ss it cannot, and refuses.
+    fail "iproute2 (ss) is required to attribute the login page to your user."
   fi
   write_stage_response "$url" || exit 1
   if ! start_stage_listener "$STAGE_FILE"; then
@@ -1194,7 +1234,7 @@ case "$command" in
   update) cmd_update "$@" ;;
   version) cmd_version ;;
   run) cmd_run ;;
-  __serve-stage) cmd_serve_stage "${1:-}" ;;
+  __serve-stage) cmd_serve_stage "${1:-}" "${2:-}" ;;
   help | --help | -h) usage ;;
   "")
     usage >&2

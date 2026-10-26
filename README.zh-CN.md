@@ -41,6 +41,7 @@
 | `dsh` | 被管理的 Web UI | 已测试 `@deepseek-ai/dsh` 0.2.1-rc.3；用 mise 或 npm 安装 |
 | systemd 用户管理器 | 运行后台服务 | Omarchy 默认具备 |
 | `systemd-socket-activate` | 为 **Open UI** 提供一次性登录页 | 随 systemd 提供；缺失时 Open UI 会给出明确错误 |
+| `iproute2`（`ss`） | 在提供登录页前校验请求属于当前用户 | Omarchy 默认自带；缺失时 Open UI 拒绝暂存页面 |
 | `jq` | 读取内联设置、格式化状态 JSON | Omarchy 默认自带 |
 | `wl-clipboard` | 可选，用于「Copy URL」 | 未安装时按钮会给出明确错误 |
 
@@ -164,6 +165,10 @@ omarchy-shell shell call io.github.fieldnote-ops.harnessbar refresh ''
   只把该 URL 交给启动器，页面再跳转到带 token 的 URL。因此 helper、转义子进程、
   启动器和浏览器的 `/proc/<pid>/cmdline` 里都没有凭据；token 仍会出现在浏览器
   地址栏/历史中（这是打开页面本身所必需的）。
+- **登录页会校验调用方身份**：该 URL 本身是凭据——谁能取到页面谁就拿到 token。由于启动器通过
+  argv 收到该 URL（其他本机用户可读），监听器会用 `ss -tnpe` 解析请求对端 socket，只有属主
+  uid 与当前用户一致时才返回页面；其他情况一律 `403` 且不消耗页面。同一 uid 的进程仍可获取，
+  但它本来就能读 0600 的 URL 文件。
 - **为什么不用 `file://` 页面**：`dsh web` 的会话 cookie 带 `SameSite=Strict`，
   Chromium 不会在由本地文件发起的跳转中发送它，页面会停在 dsh 的 401 上。改从
   `127.0.0.1` 提供页面（端口不影响同站判定）后 cookie 才能生效。监听器只响应那条

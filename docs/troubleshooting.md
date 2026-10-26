@@ -133,6 +133,21 @@ must be updated by hand. Proxy userinfo is stripped from the service log line,
 and the panel's journal view redacts common token, Authorization, and Bearer
 formats plus URL credentials.
 
+## Open UI shows "This handoff page belongs to the user who opened it"
+
+That is the login-page listener refusing a request it could not attribute to
+your user (`403`). It resolves the peer socket with `ss -tnpe` and serves only a
+same-uid caller, because the handoff URL is reachable through world-readable
+launcher argv and fetching it yields the launch token. A refusal does not
+consume the page, so the browser can still ask for it.
+
+- If your browser or launcher reaches the page through another user or a
+  sandbox that changes the peer uid, open the UI from the panel on the local
+  session instead.
+- `iproute2` (`ss`) must be installed; `Open UI` refuses to stage the page
+  without it.
+- Repeating the open is safe: each attempt stages a fresh page and port.
+
 ## Open UI shows "dsh web authentication required"
 
 That text is `dsh web`'s own 401 page: the browser reached the UI without a

@@ -131,8 +131,12 @@ helper falls back to the runtime URL plus listener probe and reports
   one-shot `systemd-socket-activate` listener on
   `127.0.0.1:<random port>/<random path>`, handing the launcher only that URL.
   The page redirects to the tokenized URL and is removed once served, or after
-  a short TTL. Serving it from `127.0.0.1` rather than a `file://` page is
-  required: `dsh web` mints a `SameSite=Strict` cookie, which Chromium does not
+  a short TTL. The handoff URL is credential-equivalent (fetching it yields the
+  token), and it travels through world-readable argv, so the listener attributes
+  the caller before serving: `ss -tnpe` maps its connection inode to the peer
+  socket and only a peer socket owned by this uid receives the page; anything
+  else gets `403` without consuming it. Serving it from `127.0.0.1` rather than a
+  `file://` page is required: `dsh web` mints a `SameSite=Strict` cookie, which Chromium does not
   send on the redirect following a navigation started from a local file, so a
   file handoff ends on dsh's 401 page. It is only copied on explicit request.
 - Process control: no `/tmp` PID files and no signal delivery from untrusted

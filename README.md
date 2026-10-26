@@ -48,6 +48,7 @@ A plain toggle starts a process and hopes for the best. harnessbar treats
 | `dsh` | The web UI this widget manages | Tested with `@deepseek-ai/dsh` 0.2.1-rc.3; install with mise or npm |
 | systemd user manager | Runs the background service | Standard on Omarchy |
 | `systemd-socket-activate` | Serves the one-shot login page **Open UI** hands the browser | Ships with systemd; `Open UI` reports a clear error when it is missing |
+| `iproute2` (`ss`) | Attributes the login-page request to your user before serving it | Standard on Omarchy; `Open UI` refuses to stage a page without it |
 | `jq` | Reads inline settings and formats the status JSON | Present on Omarchy by default |
 | `wl-clipboard` | Optional, for **Copy URL** | The button reports a clear error when absent |
 
@@ -183,6 +184,13 @@ is detected and can be repaired instead of duplicated.
   in `/proc/<pid>/cmdline` for the helper, the escaping helpers, the launcher,
   or the browser; it does of course appear in the browser's own address
   bar/history while the page is open.
+- **The handoff page is attributed to your user.** Its URL is a credential:
+  whatever can fetch it receives the launch token. Because the launcher gets
+  that URL through argv (readable by other local users), the listener resolves
+  the request's peer socket with `ss -tnpe` and serves only when that socket
+  belongs to your uid; everything else gets `403` without consuming the page. A
+  same-uid process could still fetch it, but such a process can already read the
+  0600 URL file.
 - **Why a listener instead of a `file://` page:** `dsh web` mints its session
   cookie with `SameSite=Strict`. Chromium does not send that cookie on the
   redirect that follows a navigation started from a `file://` document, so a

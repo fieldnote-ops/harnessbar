@@ -30,6 +30,14 @@ assert_exit() {
   assert_eq "$label (exit)" "$got" "$want"
 }
 
+# Run `open` against the real `ss`: the peer-uid gate asks ss who owns the
+# other end of the connection, which the status stub cannot answer. Only the
+# web-app launcher needs stubbing, so it is copied into the per-test bin dir.
+open_env() {
+  cp -- "$STUBS/omarchy-launch-or-focus-webapp" "$TESTROOT/bin/" 2>/dev/null || true
+  PATH="$TESTROOT/bin:/usr/local/bin:/usr/bin:/bin" "$HELPER" open "$@"
+}
+
 # Minimal HTTP client for the staging-listener assertions: path, host, port.
 http_get() {
   local path="$1" host="$2" port="$3"
@@ -298,7 +306,7 @@ printf 'active\n' > "$STUB_STATE_FILE"
 printf 'http://127.0.0.1:12345/?token=stub-secret\n' > "$STUB_URL_FILE"
 chmod 600 "$STUB_URL_FILE"
 : > "$STUB_SS_OPEN_FILE"
-out="$("$HELPER" open 2>/dev/null)"
+out="$(open_env 2>/dev/null)"
 assert_exit "open" 0 $?
 # `open` launches the web-app window detached; wait for the stub to record it.
 for _ in $(seq 1 50); do
@@ -336,6 +344,15 @@ assert_not_contains "escaping subprocess argv must not contain the token" "$jq_a
 wrong_status="$(http_get "/open-$(date +%s).html" "$stage_host" "$stage_port" 2>/dev/null | head -n 1)"
 assert_contains "staged listener refuses a wrong path" "$wrong_status" "404"
 assert_file_exists "unserved login page survives a wrong-path request" "$stage_file"
+# A different local user must not be able to cash in the handed-out URL: the
+# URL is in launcher argv, so the listener attributes the caller instead.
+if command -v curl >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  foreign_code="$(sudo -n -u nobody curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$stage_url" 2>/dev/null || true)"
+  assert_eq "another uid is refused the handoff page" "$foreign_code" "403"
+  assert_file_exists "a refused foreign request does not consume the page" "$stage_file"
+else
+  printf 'skip - cross-uid client needs passwordless sudo\n'
+fi
 # ... and serve the page to the browser, then take itself down.
 response="$(http_get "$stage_path" "$stage_host" "$stage_port" 2>/dev/null)"
 assert_contains "staged listener answers the browser" "$response" "HTTP/1.1 200 OK"
@@ -365,7 +382,7 @@ printf 'http://127.0.0.1:12345/?token=stub-secret\n' > "$STUB_URL_FILE"
 chmod 600 "$STUB_URL_FILE"
 : > "$STUB_SS_OPEN_FILE"
 export HARNESSBAR_OPEN_PAGE_TTL=1
-out="$("$HELPER" open 2>/dev/null)"
+out="$(open_env 2>/dev/null)"
 assert_exit "open for TTL" 0 $?
 for _ in $(seq 1 50); do
   [[ -s "$STUB_OPEN_LOG" ]] && break
@@ -394,6 +411,50 @@ else
 fi
 unset HARNESSBAR_OPEN_PAGE_TTL
 
+# 15bc. The listener refuses a caller whose socket belongs to another uid
+setup_env
+write_shell_config "12345" "$STUB_DSH_PATH"
+printf 'active\n' > "$STUB_STATE_FILE"
+printf 'http://127.0.0.1:12345/?token=stub-secret\n' > "$STUB_URL_FILE"
+chmod 600 "$STUB_URL_FILE"
+mkdir -p "$TESTROOT/fakebin"
+cat > "$TESTROOT/fakebin/ss" <<'SSEOF'
+#!/usr/bin/env bash
+# Claim the client end of the staging connection belongs to another uid.
+expr="${*: -1}"
+port="${expr##*:}"
+inode="$(readlink /proc/self/fd/0 2>/dev/null || true)"
+inode="${inode#socket:[}"; inode="${inode%]}"
+if [[ $port == 45123 ]]; then
+  printf 'ESTAB 0 0 127.0.0.1:45123 127.0.0.1:%s uid:65534 ino:999999 sk:2 <->\n' "$port"
+else
+  printf 'ESTAB 0 0 127.0.0.1:%s 127.0.0.1:45123 users:(("bash",pid=1,fd=0)) uid:%s ino:%s sk:1 <->\n' "$port" "$(id -u)" "$inode"
+fi
+SSEOF
+chmod +x "$TESTROOT/fakebin/ss"
+cp -- "$STUBS/omarchy-launch-or-focus-webapp" "$TESTROOT/bin/"
+export HARNESSBAR_OPEN_PAGE_TTL=2
+out="$(PATH="$TESTROOT/fakebin:$TESTROOT/bin:/usr/local/bin:/usr/bin:/bin" "$HELPER" open 2>/dev/null)"
+assert_exit "open with a foreign-uid caller" 0 $?
+for _ in $(seq 1 50); do
+  [[ -s "$STUB_OPEN_LOG" ]] && break
+  sleep 0.05
+done
+stage_url="${open_log:-}"
+stage_url="$(tail -n 1 "$STUB_OPEN_LOG" 2>/dev/null || true)"
+stage_url="${stage_url##* }"
+stage_hostport="${stage_url#http://}"
+stage_host="${stage_hostport%%:*}"
+stage_port="${stage_hostport%%/*}"
+stage_port="${stage_port##*:}"
+stage_path="/${stage_hostport#*/}"
+stage_file="$(find "$XDG_RUNTIME_DIR/harnessbar" -maxdepth 1 -name 'open-*.http' 2>/dev/null | head -n 1)"
+response="$(http_get "$stage_path" "$stage_host" "$stage_port" 2>/dev/null)"
+assert_contains "a foreign uid is refused" "$response" "403 Forbidden"
+assert_not_contains "a foreign uid gets no launch token" "$response" "stub-secret"
+assert_file_exists "a refused request does not consume the page" "$stage_file"
+unset HARNESSBAR_OPEN_PAGE_TTL
+
 # 15bb. URLs with reserved characters are safely embedded in the page
 setup_env
 write_shell_config "12345" "$STUB_DSH_PATH"
@@ -401,7 +462,7 @@ printf 'active\n' > "$STUB_STATE_FILE"
 printf 'http://127.0.0.1:12345/?token=stub-secret&scope=x%%22y\n' > "$STUB_URL_FILE"
 chmod 600 "$STUB_URL_FILE"
 : > "$STUB_SS_OPEN_FILE"
-out="$("$HELPER" open 2>/dev/null)"
+out="$(open_env 2>/dev/null)"
 assert_exit "open with reserved characters" 0 $?
 for _ in $(seq 1 50); do
   [[ -s "$STUB_OPEN_LOG" ]] && break
