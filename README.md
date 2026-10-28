@@ -186,11 +186,11 @@ is detected and can be repaired instead of duplicated.
   bar/history while the page is open.
 - **The handoff page is attributed to your user.** Its URL is a credential:
   whatever can fetch it receives the launch token. Because the launcher gets
-  that URL through argv (readable by other local users), the listener resolves
-  the request's peer socket with `ss -tnpe` and serves only when that socket
-  belongs to your uid; everything else gets `403` without consuming the page. A
-  same-uid process could still fetch it, but such a process can already read the
-  0600 URL file.
+  that URL through argv (readable by other local users), the listener reverses
+  its own connection's TCP four-tuple with `ss -tnpe` and serves only when the
+  caller's socket matches it exactly and belongs to your uid; a missing or
+  ambiguous match gets `403` without consuming the page. A same-uid process
+  could still fetch it, but such a process can already read the 0600 URL file.
 - **Why a listener instead of a `file://` page:** `dsh web` mints its session
   cookie with `SameSite=Strict`. Chromium does not send that cookie on the
   redirect that follows a navigation started from a `file://` document, so a

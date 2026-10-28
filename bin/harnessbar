@@ -686,20 +686,29 @@ write_stage_response() {
 # users, but the uid is not, which makes this the check that fails closed.
 # Anything unexpected (no ss, no matching socket, no uid) denies the request.
 stage_peer_is_self() {
-  local port="${1:-}" inode="" line="" peer="" peer_port="" client="" uid="" me
+  local port="${1:-}" inode="" line="" self_local="" self_peer="" client="" uid="" me
   [[ $port =~ ^[0-9]+$ ]] || return 1
   command -v ss >/dev/null 2>&1 || return 1
   inode="$(readlink "/proc/self/fd/0" 2>/dev/null || true)"
   inode="${inode#socket:[}"
   inode="${inode%]}"
   [[ $inode =~ ^[0-9]+$ ]] || return 1
+  # The accepted socket is the only row carrying our inode, so its own local and
+  # peer endpoints are trustworthy.
   line="$(ss -tnpeH "sport = :$port" 2>/dev/null | grep -F "ino:$inode " | head -n 1 || true)"
   [[ -n $line ]] || return 1
-  peer="$(printf '%s\n' "$line" | awk '{print $5}')"
-  peer_port="${peer##*:}"
-  [[ $peer_port =~ ^[0-9]+$ ]] || return 1
-  client="$(ss -tnpeH "sport = :$peer_port" 2>/dev/null \
-    | awk -v want=":$peer_port" '$4 ~ (want "$") { print; exit }' || true)"
+  self_local="$(printf '%s\n' "$line" | awk '{print $4}')"
+  self_peer="$(printf '%s\n' "$line" | awk '{print $5}')"
+  [[ -n $self_local && -n $self_peer ]] || return 1
+  # The caller's socket must be the exact reverse of ours: source address and
+  # port equal to our peer, destination address and port equal to our local end.
+  # Matching only the source port would let a socket owned by another user, the
+  # same port on a different loopback address, stand in for a connection that
+  # belongs to us; several matching rows are equally untrustworthy.
+  client="$(ss -tnpeH "sport = :${self_peer##*:}" 2>/dev/null \
+    | awk -v want_local="$self_peer" -v want_peer="$self_local" '
+        $4 == want_local && $5 == want_peer { rows++; row = $0 }
+        END { if (rows == 1) print row }' || true)"
   [[ -n $client ]] || return 1
   uid="$(printf '%s\n' "$client" | grep -oE 'uid:[0-9]+' | head -n 1 | cut -d: -f2 || true)"
   me="$(id -u 2>/dev/null || true)"

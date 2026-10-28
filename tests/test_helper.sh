@@ -455,6 +455,65 @@ assert_not_contains "a foreign uid gets no launch token" "$response" "stub-secre
 assert_file_exists "a refused request does not consume the page" "$stage_file"
 unset HARNESSBAR_OPEN_PAGE_TTL
 
+# 15bd. Attribution pins the reversed TCP four-tuple and rejects ambiguity
+for mode in attack ambiguous; do
+  setup_env
+  write_shell_config "12345" "$STUB_DSH_PATH"
+  printf 'active\n' > "$STUB_STATE_FILE"
+  printf 'http://127.0.0.1:12345/?token=stub-secret\n' > "$STUB_URL_FILE"
+  chmod 600 "$STUB_URL_FILE"
+  mkdir -p "$TESTROOT/fakebin"
+  cat > "$TESTROOT/fakebin/ss" <<'SSEOF'
+#!/usr/bin/env bash
+# Model the reviewer's attack: another user connects from a different loopback
+# address with the same source port as an unrelated owner-uid connection.
+expr="${*: -1}"
+port="${expr##*:}"
+inode="$(readlink /proc/self/fd/0 2>/dev/null || true)"
+inode="${inode#socket:[}"; inode="${inode%]}"
+if [[ $port == 45123 ]]; then
+  listen="$(cat "$STUB_SS_STATE" 2>/dev/null)"
+  case "${STUB_SS_MODE:-attack}" in
+    attack)
+      printf 'ESTAB 0 0 127.0.0.1:45123 127.0.0.1:%s users:(("bash",pid=1,fd=0)) uid:%s ino:1111 sk:1 <->\n' "$listen" "$(id -u)"
+      printf 'ESTAB 0 0 127.0.0.2:45123 127.0.0.1:%s uid:65534 ino:2222 sk:2 <->\n' "$listen"
+      ;;
+    ambiguous)
+      printf 'ESTAB 0 0 127.0.0.2:45123 127.0.0.1:%s uid:%s ino:3333 sk:3 <->\n' "$listen" "$(id -u)"
+      printf 'ESTAB 0 0 127.0.0.2:45123 127.0.0.1:%s uid:%s ino:4444 sk:4 <->\n' "$listen" "$(id -u)"
+      ;;
+  esac
+else
+  printf '%s' "$port" > "$STUB_SS_STATE"
+  printf 'ESTAB 0 0 127.0.0.1:%s 127.0.0.2:45123 users:(("bash",pid=1,fd=0)) uid:%s ino:%s sk:1 <->\n' "$port" "$(id -u)" "$inode"
+fi
+SSEOF
+  chmod +x "$TESTROOT/fakebin/ss"
+  export STUB_SS_STATE="$TESTROOT/ss-state"
+  export STUB_SS_MODE="$mode"
+  cp -- "$STUBS/omarchy-launch-or-focus-webapp" "$TESTROOT/bin/"
+  export HARNESSBAR_OPEN_PAGE_TTL=2
+  out="$(PATH="$TESTROOT/fakebin:$TESTROOT/bin:/usr/local/bin:/usr/bin:/bin" "$HELPER" open 2>/dev/null)"
+  assert_exit "open under $mode attribution" 0 $?
+  for _ in $(seq 1 50); do
+    [[ -s "$STUB_OPEN_LOG" ]] && break
+    sleep 0.05
+  done
+  stage_url="$(tail -n 1 "$STUB_OPEN_LOG" 2>/dev/null || true)"
+  stage_url="${stage_url##* }"
+  stage_hostport="${stage_url#http://}"
+  stage_host="${stage_hostport%%:*}"
+  stage_port="${stage_hostport%%/*}"
+  stage_port="${stage_port##*:}"
+  stage_path="/${stage_hostport#*/}"
+  stage_file="$(find "$XDG_RUNTIME_DIR/harnessbar" -maxdepth 1 -name 'open-*.http' 2>/dev/null | head -n 1)"
+  response="$(http_get "$stage_path" "$stage_host" "$stage_port" 2>/dev/null)"
+  assert_contains "$mode attribution is refused" "$response" "403 Forbidden"
+  assert_not_contains "$mode attribution gets no token" "$response" "stub-secret"
+  assert_file_exists "$mode refusal does not consume the page" "$stage_file"
+  unset HARNESSBAR_OPEN_PAGE_TTL STUB_SS_MODE
+done
+
 # 15bb. URLs with reserved characters are safely embedded in the page
 setup_env
 write_shell_config "12345" "$STUB_DSH_PATH"

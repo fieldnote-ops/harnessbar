@@ -133,9 +133,10 @@ helper falls back to the runtime URL plus listener probe and reports
   The page redirects to the tokenized URL and is removed once served, or after
   a short TTL. The handoff URL is credential-equivalent (fetching it yields the
   token), and it travels through world-readable argv, so the listener attributes
-  the caller before serving: `ss -tnpe` maps its connection inode to the peer
-  socket and only a peer socket owned by this uid receives the page; anything
-  else gets `403` without consuming it. Serving it from `127.0.0.1` rather than a
+  the caller before serving: `ss -tnpe` maps its connection inode to its own
+  4-tuple, then requires the caller's socket to be the exact reverse of that
+  tuple and to belong to this uid; a missing or ambiguous match gets `403`
+  without consuming the page. Serving it from `127.0.0.1` rather than a
   `file://` page is required: `dsh web` mints a `SameSite=Strict` cookie, which Chromium does not
   send on the redirect following a navigation started from a local file, so a
   file handoff ends on dsh's 401 page. It is only copied on explicit request.

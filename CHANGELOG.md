@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.8 — 2026-10-27
+
+Pin caller attribution to the reversed TCP four-tuple (second review finding).
+
+- 0.3.5 resolved the accepted socket's peer address but then looked the caller up
+  by source port alone. A socket owned by another user, from a different
+  loopback address reusing a source port that an owner-uid connection also uses,
+  could be mistaken for that connection and receive the page with the launch
+  token.
+- The caller's socket must now be the exact reverse of ours: same source address
+  and port as our peer end, same destination address and port as our local end.
+  A missing match, or more than one match, is rejected.
+- Tests model both the port-reuse attack and an ambiguous double match: 403, no
+  token, page not consumed (167 helper assertions).
+
+
 ## 0.3.7 — 2026-10-27
 
 Surface why a dsh update failed instead of "run it in a terminal".
