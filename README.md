@@ -191,6 +191,10 @@ is detected and can be repaired instead of duplicated.
   caller's socket matches it exactly and belongs to your uid; a missing or
   ambiguous match gets `403` without consuming the page. A same-uid process
   could still fetch it, but such a process can already read the 0600 URL file.
+  Attribution happens **before** any request byte is read, the reads are capped
+  (4 KiB request line, 64 headers, 16 KiB total, 10 s), and only 8 accepted
+  workers may exist at once (`503` beyond that), because the listener has no
+  cap of its own.
 - **Why a listener instead of a `file://` page:** `dsh web` mints its session
   cookie with `SameSite=Strict`. Chromium does not send that cookie on the
   redirect that follows a navigation started from a `file://` document, so a

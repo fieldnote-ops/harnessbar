@@ -136,7 +136,10 @@ helper falls back to the runtime URL plus listener probe and reports
   the caller before serving: `ss -tnpe` maps its connection inode to its own
   4-tuple, then requires the caller's socket to be the exact reverse of that
   tuple and to belong to this uid; a missing or ambiguous match gets `403`
-  without consuming the page. Serving it from `127.0.0.1` rather than a
+  without consuming the page. The check runs before any request byte is read;
+  reads are then bounded (4 KiB request line, 64 headers, 16 KiB, 10 s) and at
+  most 8 accepted workers exist at once, because `systemd-socket-activate
+  --accept` spawns one instance per connection with no cap of its own. Serving it from `127.0.0.1` rather than a
   `file://` page is required: `dsh web` mints a `SameSite=Strict` cookie, which Chromium does not
   send on the redirect following a navigation started from a local file, so a
   file handoff ends on dsh's 401 page. It is only copied on explicit request.

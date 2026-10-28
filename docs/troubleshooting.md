@@ -172,6 +172,13 @@ consume the page, so the browser can still ask for it.
   without it.
 - Repeating the open is safe: each attempt stages a fresh page and port.
 
+## Open UI shows "Too many handoff connections" or "Request ... too large"
+
+The login-page listener answers `503` when its worker slots are full (8 accepted
+connections) and `431` when a request exceeds the bounds (4 KiB request line, 64
+headers, 16 KiB total). Both are refusals from a caller that never received the
+page; nothing is consumed, so open the UI again.
+
 ## Open UI shows "dsh web authentication required"
 
 That text is `dsh web`'s own 401 page: the browser reached the UI without a

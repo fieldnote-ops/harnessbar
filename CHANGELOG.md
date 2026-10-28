@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.9 — 2026-10-27
+
+Authorize before parsing, and bound what an unauthenticated caller can make us
+hold (third review finding).
+
+- The responder attributed the caller, then read the request. A local UID could
+  connect and stream an unterminated request line or headers, which the
+  owner-uid helper buffered before the uid check ran.
+- Order is now: take a worker slot, attribute the peer, then read.
+- Reads are bounded: 4096-byte request line, 64 headers, 1024 bytes per header,
+  16 KiB of headers, 10 s wall clock; exceeding a bound answers
+  `431 Request Header Fields Too Large` without consuming the page.
+- Concurrent accepted workers are capped (8 by default, `flock` slots in the
+  runtime directory) because `systemd-socket-activate --accept` spawns one
+  instance per connection with no cap; excess connections get
+  `503 Service Unavailable`.
+- The cap travels to the responder as an argument: the listener's children do
+  not reliably inherit the environment.
+- Tests: oversized request line (431), a foreign uid streaming 200 KiB without
+  a newline (403 within 0.02 s, page intact), and two idle workers plus a third
+  connection (503), 179 assertions.
+
+
 ## 0.3.8 — 2026-10-27
 
 Pin caller attribution to the reversed TCP four-tuple (second review finding).

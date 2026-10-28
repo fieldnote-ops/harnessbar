@@ -715,32 +715,88 @@ stage_peer_is_self() {
   [[ -n $uid && -n $me && $uid == "$me" ]]
 }
 
+# Fixed plain-text response: ASCII bodies only, so ${#body} is also the byte
+# length the client needs.
+stage_reply() {
+  local status="$1" body="${2:-}"
+  printf 'HTTP/1.1 %s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %s\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n%s' \
+    "$status" "${#body}" "$body"
+}
+
+# Bound concurrent accepted connections. systemd-socket-activate spawns one
+# instance per connection with no cap of its own, so each responder takes one of
+# a fixed set of flock slots and refuses work when they are all taken. The lock
+# is held by this process only, so it is released when the responder exits.
+stage_take_slot() {
+  local dir="$1" slots="${2:-8}" i fd
+  [[ $slots =~ ^[0-9]+$ ]] && (( slots > 0 )) || slots=8
+  command -v flock >/dev/null 2>&1 || return 0
+  for ((i = 1; i <= slots; i++)); do
+    exec {fd}>"$dir/slot-$i.lock" 2>/dev/null || continue
+    if flock -n "$fd" 2>/dev/null; then
+      STAGE_SLOT_FD="$fd"
+      return 0
+    fi
+    exec {fd}>&-
+  done
+  return 1
+}
+
 # Serve the staged response to the first client that asks for the exact
 # single-use path, then take the listener down. Runs as the per-connection
 # child of systemd-socket-activate, so stdin/stdout are the connection and the
 # parent process is the listener.
+#
+# Order matters: take a slot, attribute the peer, and only then read anything.
+# The peer is unauthenticated until stage_peer_is_self succeeds, so it must not
+# be able to make this owner-uid process buffer its input; once it is
+# authenticated the reads are still bounded in line length, header count, total
+# bytes and wall clock.
 cmd_serve_stage() {
-  local file="${1:-}" port="${2:-}" expected="" method="" target="" version="" header=""
+  local file="${1:-}" port="${2:-}" slots="${3:-8}" dir expected="" first="" rest=""
+  local method="" target="" header="" headers=0 bytes=0
+  local max_line=4096 max_header=1024 max_headers=64 max_bytes=16384 deadline
   [[ -n $file && -s $file ]] || return 0
+  dir="$(dirname -- "$file")"
+  if ! stage_take_slot "$dir" "$slots"; then
+    stage_reply "503 Service Unavailable" 'Too many handoff connections; open the UI again.'
+    return 0
+  fi
+  if ! stage_peer_is_self "$port"; then
+    # Do not consume the page: the real browser may not have asked yet.
+    stage_reply "403 Forbidden" 'This handoff page belongs to the user who opened it.'
+    return 0
+  fi
   expected="$(head -n 1 -- "$file" 2>/dev/null || true)"
   expected="${expected#GET /}"
   expected="${expected%% *}"
-  if [[ -n $expected ]]; then
-    IFS=' ' read -r -t 10 method target version || true
-    target="${target%$'\r'}"
+  deadline=$(( SECONDS + 10 ))
+  # A line without a delimiter must not grow: cap the request line, then split
+  # it here so the split cannot exceed what was read.
+  IFS= LC_ALL=C read -r -n "$max_line" -t 5 first || true
+  first="${first%$'\r'}"
+  if (( ${#first} >= max_line )); then
+    stage_reply "431 Request Header Fields Too Large" 'Request line too long.'
+    return 0
   fi
-  # Drain the remaining request headers: closing a socket that still holds
-  # unread request bytes resets the connection, and the browser then loses the
-  # page it was about to render.
-  while IFS= read -r -t 2 header; do
+  method="${first%% *}"
+  rest="${first#* }"
+  target="${rest%% *}"
+  # Drain the request headers so closing the socket does not reset the
+  # connection and truncate the page a browser is waiting for; stop at the caps.
+  while (( SECONDS < deadline && headers < max_headers && bytes < max_bytes )); do
+    IFS= LC_ALL=C read -r -n "$max_header" -t 2 header || true
     header="${header%$'\r'}"
     [[ -z $header ]] && break
+    if (( ${#header} >= max_header )); then
+      stage_reply "431 Request Header Fields Too Large" 'Request header too long.'
+      return 0
+    fi
+    headers=$(( headers + 1 ))
+    bytes=$(( bytes + ${#header} ))
   done
-  if ! stage_peer_is_self "$port"; then
-    # Do not consume the page: the real browser may not have asked yet.
-    local body='This handoff page belongs to the user who opened it.'
-    printf 'HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %s\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n%s' \
-      "${#body}" "$body"
+  if (( headers >= max_headers || bytes >= max_bytes )); then
+    stage_reply "431 Request Header Fields Too Large" 'Too many request headers.'
     return 0
   fi
   if [[ -n $expected && $method == "GET" && $target == "/$expected" ]]; then
@@ -756,12 +812,16 @@ cmd_serve_stage() {
 # that was already taken, so retry a few.
 start_stage_listener() {
   local file="$1" port pid attempt runner=()
+  # The cap travels as an argument: the listener's children do not reliably
+  # inherit the environment.
+  local slots="${HARNESSBAR_STAGE_MAX_SLOTS:-8}"
+  [[ $slots =~ ^[0-9]+$ ]] && (( slots > 0 )) || slots=8
   command -v systemd-socket-activate >/dev/null 2>&1 || return 1
   command -v setsid >/dev/null 2>&1 && runner=(setsid)
   for attempt in 1 2 3 4 5 6 7 8; do
     port=$(( 32000 + RANDOM % 20000 ))
     "${runner[@]}" systemd-socket-activate --listen="127.0.0.1:$port" \
-      --accept --inetd -- "$ROOT/bin/harnessbar" __serve-stage "$file" "$port" >/dev/null 2>&1 &
+      --accept --inetd -- "$ROOT/bin/harnessbar" __serve-stage "$file" "$port" "$slots" >/dev/null 2>&1 &
     pid=$!
     sleep 0.15
     if kill -0 "$pid" 2>/dev/null; then
@@ -1266,7 +1326,7 @@ case "$command" in
   update) cmd_update "$@" ;;
   version) cmd_version ;;
   run) cmd_run ;;
-  __serve-stage) cmd_serve_stage "${1:-}" "${2:-}" ;;
+  __serve-stage) cmd_serve_stage "${1:-}" "${2:-}" "${3:-}" ;;
   help | --help | -h) usage ;;
   "")
     usage >&2

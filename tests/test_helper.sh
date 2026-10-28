@@ -39,6 +39,16 @@ open_env() {
 }
 
 # Minimal HTTP client for the staging-listener assertions: path, host, port.
+# Send raw bytes (no trailing newline) and read whatever the server returns.
+http_send_raw() {
+  local host="$1" port="$2" file="$3"
+  exec 3<>"/dev/tcp/$host/$port" 2>/dev/null || return 1
+  cat -- "$file" >&3 2>/dev/null || true
+  cat <&3
+  exec 3<&- 3>&-
+  return 0
+}
+
 http_get() {
   local path="$1" host="$2" port="$3"
   exec 3<>"/dev/tcp/$host/$port" 2>/dev/null || return 1
@@ -513,6 +523,103 @@ SSEOF
   assert_file_exists "$mode refusal does not consume the page" "$stage_file"
   unset HARNESSBAR_OPEN_PAGE_TTL STUB_SS_MODE
 done
+
+# 15be. The responder bounds input and worker count before it can be abused
+# A same-uid client may not make the helper buffer an unbounded request line.
+setup_env
+write_shell_config "12345" "$STUB_DSH_PATH"
+printf 'active\n' > "$STUB_STATE_FILE"
+printf 'http://127.0.0.1:12345/?token=stub-secret\n' > "$STUB_URL_FILE"
+chmod 600 "$STUB_URL_FILE"
+out="$(open_env 2>/dev/null)"
+assert_exit "open before the oversized-line case" 0 $?
+for _ in $(seq 1 50); do [[ -s "$STUB_OPEN_LOG" ]] && break; sleep 0.05; done
+stage_url="$(tail -n 1 "$STUB_OPEN_LOG" 2>/dev/null || true)"
+stage_url="${stage_url##* }"
+stage_hostport="${stage_url#http://}"
+stage_host="${stage_hostport%%:*}"
+stage_port="${stage_hostport%%/*}"; stage_port="${stage_port##*:}"
+stage_file="$(find "$XDG_RUNTIME_DIR/harnessbar" -maxdepth 1 -name 'open-*.http' 2>/dev/null | head -n 1)"
+printf 'GET /' > "$TESTROOT/huge.req"
+head -c 9000 /dev/zero | tr '\0' 'A' >> "$TESTROOT/huge.req"
+elapsed_start="${EPOCHREALTIME:-0}"
+response="$(http_send_raw "$stage_host" "$stage_port" "$TESTROOT/huge.req" 2>/dev/null)"
+assert_contains "an oversized request line is refused" "$response" "431"
+assert_not_contains "an oversized request line gets no token" "$response" "stub-secret"
+assert_file_exists "an oversized request line does not consume the page" "$stage_file"
+
+# A different uid must be refused before its bytes are read at all.
+setup_env
+write_shell_config "12345" "$STUB_DSH_PATH"
+printf 'active\n' > "$STUB_STATE_FILE"
+printf 'http://127.0.0.1:12345/?token=stub-secret\n' > "$STUB_URL_FILE"
+chmod 600 "$STUB_URL_FILE"
+mkdir -p "$TESTROOT/fakebin"
+cat > "$TESTROOT/fakebin/ss" <<'SSEOF'
+#!/usr/bin/env bash
+expr="${*: -1}"
+port="${expr##*:}"
+inode="$(readlink /proc/self/fd/0 2>/dev/null || true)"
+inode="${inode#socket:[}"; inode="${inode%]}"
+if [[ $port == 45123 ]]; then
+  printf 'ESTAB 0 0 127.0.0.1:45123 127.0.0.1:%s uid:65534 ino:999999 sk:2 <->\n' "${STUB_SS_LISTEN:-0}"
+else
+  printf '%s' "$port" > "$STUB_SS_STATE"
+  printf 'ESTAB 0 0 127.0.0.1:%s 127.0.0.1:45123 users:(("bash",pid=1,fd=0)) uid:%s ino:%s sk:1 <->\n' "$port" "$(id -u)" "$inode"
+fi
+SSEOF
+chmod +x "$TESTROOT/fakebin/ss"
+export STUB_SS_STATE="$TESTROOT/ss-state"
+cp -- "$STUBS/omarchy-launch-or-focus-webapp" "$TESTROOT/bin/"
+out="$(PATH="$TESTROOT/fakebin:$TESTROOT/bin:/usr/local/bin:/usr/bin:/bin" "$HELPER" open 2>/dev/null)"
+assert_exit "open before the foreign unbounded-input case" 0 $?
+for _ in $(seq 1 50); do [[ -s "$STUB_OPEN_LOG" ]] && break; sleep 0.05; done
+stage_url="$(tail -n 1 "$STUB_OPEN_LOG" 2>/dev/null || true)"
+stage_url="${stage_url##* }"
+stage_hostport="${stage_url#http://}"
+stage_host="${stage_hostport%%:*}"
+stage_port="${stage_hostport%%/*}"; stage_port="${stage_port##*:}"
+stage_file="$(find "$XDG_RUNTIME_DIR/harnessbar" -maxdepth 1 -name 'open-*.http' 2>/dev/null | head -n 1)"
+printf 'GET /' > "$TESTROOT/foreign.req"
+head -c 200000 /dev/zero | tr '\0' 'B' >> "$TESTROOT/foreign.req"
+start="${EPOCHREALTIME:-0}"
+response="$(http_send_raw "$stage_host" "$stage_port" "$TESTROOT/foreign.req" 2>/dev/null)"
+finish="${EPOCHREALTIME:-0}"
+assert_contains "a foreign uid with unterminated input is refused" "$response" "403 Forbidden"
+assert_not_contains "a foreign uid gets no token" "$response" "stub-secret"
+assert_file_exists "the foreign refusal does not consume the page" "$stage_file"
+if [[ $start =~ ^[0-9]+\.[0-9]+$ && $finish =~ ^[0-9]+\.[0-9]+$ ]]; then
+  elapsed="$(awk -v a="$start" -v b="$finish" 'BEGIN { printf "%.2f", b - a }')"
+  if awk -v e="$elapsed" 'BEGIN { exit !(e < 4) }'; then
+    pass "the foreign refusal is immediate (${elapsed}s)"
+  else
+    fail "the foreign refusal waited on input (${elapsed}s)"
+  fi
+fi
+
+# Concurrent workers are capped: idle connections cannot pile up.
+setup_env
+write_shell_config "12345" "$STUB_DSH_PATH"
+printf 'active\n' > "$STUB_STATE_FILE"
+printf 'http://127.0.0.1:12345/?token=stub-secret\n' > "$STUB_URL_FILE"
+chmod 600 "$STUB_URL_FILE"
+out="$(HARNESSBAR_STAGE_MAX_SLOTS=2 open_env 2>/dev/null)"
+assert_exit "open with a two-worker cap" 0 $?
+for _ in $(seq 1 50); do [[ -s "$STUB_OPEN_LOG" ]] && break; sleep 0.05; done
+stage_url="$(tail -n 1 "$STUB_OPEN_LOG" 2>/dev/null || true)"
+stage_url="${stage_url##* }"
+stage_hostport="${stage_url#http://}"
+stage_host="${stage_hostport%%:*}"
+stage_port="${stage_hostport%%/*}"; stage_port="${stage_port##*:}"
+stage_path="/${stage_hostport#*/}"
+stage_file="$(find "$XDG_RUNTIME_DIR/harnessbar" -maxdepth 1 -name 'open-*.http' 2>/dev/null | head -n 1)"
+exec 8<>"/dev/tcp/$stage_host/$stage_port" 2>/dev/null || true
+exec 9<>"/dev/tcp/$stage_host/$stage_port" 2>/dev/null || true
+sleep 0.8
+response="$(http_get "$stage_path" "$stage_host" "$stage_port" 2>/dev/null)"
+assert_contains "extra handoff workers are refused" "$response" "503"
+assert_file_exists "a refused worker does not consume the page" "$stage_file"
+exec 8<&- 9<&- 2>/dev/null || true
 
 # 15bb. URLs with reserved characters are safely embedded in the page
 setup_env
