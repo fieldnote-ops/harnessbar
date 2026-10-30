@@ -110,7 +110,7 @@ dsh 更新命令则通过环境变量接收代理，而不是 argv。
 | `openMode` | enum | `Webapp` | `Webapp` 用 `omarchy-launch-or-focus-webapp`；`Browser` 用 `xdg-open` |
 | `startOnLogin` | enum | `Off` | 面板/CLI 保存后立即应用（`On` 执行 `systemctl --user enable`），或由 **Re-apply unit** 应用 |
 | `refreshSec` | integer | `5` | 状态轮询间隔（秒） |
-| `glyph` | string | `󰚩` | 状态栏 Nerd Font 图标；填 `DS` 可用纯文字标签 |
+| `glyph` | string | *(logo)* | 状态栏文字图标覆盖；留空显示 DeepSeek logo，填 `DS` 可用纯文字标签 |
 
 ```sh
 omarchy bar set io.github.fieldnote-ops.harnessbar proxy http://127.0.0.1:8080

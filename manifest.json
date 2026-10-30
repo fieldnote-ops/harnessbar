@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.fieldnote-ops.harnessbar",
   "name": "DeepSeek Harness",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "author": "FIELD NOTE",
   "license": "MIT",
   "homepage": "https://github.com/fieldnote-ops/harnessbar",
@@ -25,7 +25,7 @@
       "openMode": "Webapp",
       "startOnLogin": "Off",
       "refreshSec": 5,
-      "glyph": "󰚩"
+      "glyph": ""
     },
     "schema": [
       {
@@ -79,9 +79,9 @@
       {
         "key": "glyph",
         "type": "string",
-        "label": "Nerd Font glyph",
-        "description": "Bar glyph. Use any Nerd Font symbol, or the letters DS for a plain label.",
-        "defaultValue": "󰚩"
+        "label": "Bar glyph override",
+        "description": "Optional text label shown instead of the DeepSeek logo. Use any Nerd Font symbol, or the letters DS for a plain label.",
+        "defaultValue": ""
       }
     ]
   }

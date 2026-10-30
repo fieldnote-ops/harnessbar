@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.10 — 2026-10-30
+
+Fix `Open UI` focusing an unrelated window, and draw the DeepSeek mark.
+
+- `Open UI` picked its window with `omarchy-launch-or-focus-webapp`, whose
+  pattern is matched as a word-boundary regex over the window class **and**
+  title. The bare product name therefore also matched any window that merely
+  mentioned it — a browser tab titled "DeepSeek Harness | …" — and `open`
+  focused that window and reported `opened` without ever launching the UI.
+  The pattern is now anchored (`^DeepSeek Harness$`), so only the web-app
+  window (whose title is exactly the product name once the redirect lands) is
+  focused; anything else launches a fresh window.
+- The bar glyph is now the DeepSeek mark, drawn from the brand SVG path as a
+  QML `Shape`, in the brand blue `#4D6BFE`. No asset file ships with it, and
+  the bar still signals state through the button opacity (1.0 active, 0.55
+  idle, urgent tint on error).
+- `glyph` becomes an optional override instead of the default: empty (the new
+  default) shows the logo, any value the user typed keeps working as a plain
+  text label. The stored value in `shell.json` is untouched.
+- Tests: the launcher argv now pins the anchored pattern, plus matcher
+  assertions that it keeps matching the web-app window and rejects a title
+  that only mentions or prefixes it; 182 helper assertions.
+
+
 ## 0.3.9 — 2026-10-27
 
 Authorize before parsing, and bound what an unauthenticated caller can make us
