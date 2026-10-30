@@ -888,7 +888,13 @@ cmd_open() {
       ;;
     *)
       if command -v omarchy-launch-or-focus-webapp >/dev/null 2>&1; then
-        setsid omarchy-launch-or-focus-webapp "DeepSeek Harness" "$launch_uri" >/dev/null 2>&1 &
+        # The launcher picks a window with a word-boundary regex over class and
+        # title, so the bare product name also matched any browser window whose
+        # title merely mentions it (a documentation tab, for instance); Open UI
+        # then focused that window and never opened the page. Anchor the pattern
+        # so only the web-app window -- whose title is exactly the product name
+        # once the redirect lands -- is focused; anything else launches anew.
+        setsid omarchy-launch-or-focus-webapp "^DeepSeek Harness$" "$launch_uri" >/dev/null 2>&1 &
       elif command -v omarchy-launch-webapp >/dev/null 2>&1; then
         setsid omarchy-launch-webapp "$launch_uri" >/dev/null 2>&1 &
       elif command -v xdg-open >/dev/null 2>&1; then

@@ -123,7 +123,7 @@ dsh update commands receive it through environment variables, not argv.
 | `openMode` | enum | `Webapp` | `Webapp` uses `omarchy-launch-or-focus-webapp`; `Browser` uses `xdg-open` |
 | `startOnLogin` | enum | `Off` | Saved from the panel or CLI; applied immediately when saved (`On` runs `systemctl --user enable`), or by **Re-apply unit** |
 | `refreshSec` | integer | `5` | Status polling interval |
-| `glyph` | string | `󰚩` | Nerd Font glyph for the bar; use `DS` for a plain label |
+| `glyph` | string | *(logo)* | Optional text label override for the bar; empty shows the DeepSeek logo, `DS` gives a plain label |
 
 ```sh
 omarchy bar set io.github.fieldnote-ops.harnessbar proxy http://127.0.0.1:8080

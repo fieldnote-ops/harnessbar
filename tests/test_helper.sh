@@ -324,9 +324,21 @@ for _ in $(seq 1 50); do
   sleep 0.05
 done
 open_log="$(cat "$STUB_OPEN_LOG" 2>/dev/null || true)"
-assert_contains "open used the web-app launcher" "$open_log" "DeepSeek Harness http://127.0.0.1:"
+assert_contains "open used the web-app launcher" "$open_log" "^DeepSeek Harness\$ http://127.0.0.1:"
 assert_not_contains "launcher argv must not contain the launch token" "$open_log" "stub-secret"
 assert_not_contains "launcher argv must not contain the token URL" "$open_log" "token="
+# Regression: the launcher matches the window pattern as a word-boundary regex
+# over class AND title, so the bare product name also matched any window whose
+# title merely mentions it (a documentation tab) and Open UI focused that window
+# instead of opening the page. The anchored pattern must miss those.
+webapp_pattern="${open_log%% http://*}"
+jq_match() { jq -nr --arg t "$1" --arg p "$2" '($t | test("\\b" + $p + "\\b"; "i"))'; }
+assert_eq "anchored pattern keeps matching the webapp window" \
+  "$(jq_match "DeepSeek Harness" "$webapp_pattern")" "true"
+assert_eq "anchored pattern rejects a title that only mentions it" \
+  "$(jq_match "DeepSeek Harness | Omarchy Plugins — Zen Browser" "$webapp_pattern")" "false"
+assert_eq "anchored pattern rejects a title that only prefixes it" \
+  "$(jq_match "DeepSeek Harness docs" "$webapp_pattern")" "false"
 stage_url="${open_log##* }"
 stage_hostport="${stage_url#http://}"
 stage_host="${stage_hostport%%:*}"
